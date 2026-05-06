@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "bypassPermissions": true,
+    "allowedTools": ["Bash", "Edit", "Write"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "true" }]
+      }
+    ]
+  }
+}

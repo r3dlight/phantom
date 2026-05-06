@@ -1,0 +1,14 @@
+[package]
+name = "phantom-tarball"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+phantom-core.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+flate2.workspace = true
+tar.workspace = true
+anyhow.workspace = true

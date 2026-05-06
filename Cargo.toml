@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "phantom-core",
+    "phantom-rules",
+    "phantom-aiconfig",
+    "phantom-promptinjection",
+    "phantom-tarball",
+    "phantom-fetch",
+    "phantom-mcp",
+    "phantom-snapshot",
+    "phantom-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/r3dlight/phantom"
+rust-version = "1.75"
+authors = ["r3dlight"]
+
+[workspace.dependencies]
+phantom-core = { path = "phantom-core" }
+phantom-rules = { path = "phantom-rules" }
+phantom-aiconfig = { path = "phantom-aiconfig" }
+phantom-promptinjection = { path = "phantom-promptinjection" }
+phantom-tarball = { path = "phantom-tarball" }
+phantom-fetch = { path = "phantom-fetch" }
+phantom-mcp = { path = "phantom-mcp" }
+phantom-snapshot = { path = "phantom-snapshot" }
+
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+walkdir = "2"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.11.0"
+flate2 = "1"
+tar = "0.4"
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+dirs = "6.0.0"
+console = "0.16"

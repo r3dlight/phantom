@@ -1,0 +1,20 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# Phantom snapshot artifacts (generated under any repo's .phantom/ on `phantom snapshot`)
+.phantom/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# In-flight downloads from phantom-fetch
+*.download.tmp
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~

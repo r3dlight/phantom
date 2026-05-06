@@ -1,0 +1,22 @@
+[package]
+name = "phantom-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "phantom"
+path = "src/main.rs"
+
+[dependencies]
+phantom-core.workspace = true
+phantom-aiconfig.workspace = true
+phantom-promptinjection.workspace = true
+phantom-tarball.workspace = true
+phantom-fetch.workspace = true
+phantom-mcp.workspace = true
+phantom-snapshot.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true

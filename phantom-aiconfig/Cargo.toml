@@ -1,0 +1,12 @@
+[package]
+name = "phantom-aiconfig"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+phantom-core.workspace = true
+phantom-rules.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
