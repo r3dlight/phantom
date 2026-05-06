@@ -80,8 +80,12 @@ jobs:
             os: ubuntu-24.04-arm
             archive: tar.gz
             shell: bash
+          # macOS Intel: cross-compiled from the Apple Silicon runner because
+          # `macos-13` (Intel) runners frequently sit in queue for hours and
+          # block the entire release. Rust handles `aarch64 → x86_64` Apple
+          # cross-compilation cleanly on a single host.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-14
             archive: tar.gz
             shell: bash
           - target: aarch64-apple-darwin
