@@ -107,6 +107,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+          # Skip cache save on Windows: Swatinem/rust-cache's tar-based save
+          # step is brittle on the windows-latest runner (path locks from
+          # MSVC, antivirus interference) and intermittently fails the job
+          # post-step, which blocks the entire release because `needs: build`
+          # requires every matrix entry to succeed. Restore still runs, so
+          # subsequent builds reuse whatever cache is in the bucket from the
+          # CI workflow on main. The release pipeline only runs on tags, so
+          # the ~2 min cold-build penalty per Windows release is acceptable.
+          save-if: ${{ matrix.target != 'x86_64-pc-windows-msvc' }}
 
       - name: cargo build
         run: cargo build --release --bin phantom --target ${{ matrix.target }}
