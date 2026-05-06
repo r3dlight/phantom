@@ -185,7 +185,34 @@ Per-command help is available via `phantom <command> --help`.
 
 > Recursively walk `<PATH>` and audit every AI-agent configuration file. **Use this on any repo where developers run AI coding agents.**
 
-**What it scans:** `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `.cursor/rules`, `.windsurfrules`, `.aider.conf.yml`, `.github/copilot-instructions.md`, `.mcp.json`, `mcp.json`, `claude_desktop_config.json`, `.claude/settings.json`, `.claude/settings.local.json`.
+**What it scans:** every project-level AI-agent configuration file documented by its tool's official spec. Coverage as of v0.1:
+
+| Tool | Files |
+|------|-------|
+| Claude Code (Anthropic) | `CLAUDE.md`, `.claude/settings.json`, `.claude/settings.local.json`, `.claude/**`, `claude_desktop_config.json` |
+| Generic (Codex CLI, Cursor, Aider, Grok CLI) | `AGENTS.md`, `AGENTS.override.md` |
+| Cursor | `.cursorrules`, `.cursorignore`, `.cursor/rules/**/*.mdc` (modern multi-rule), `.cursor/**` |
+| Windsurf (Codeium) | `.windsurfrules`, `.windsurf/**` |
+| Aider | `.aider.conf.yml`, `.aiderignore` |
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| Continue.dev | `.continuerules`, `.continue/config.{json,yaml,yml}`, `.continue/**` |
+| Cline / Roo Code | `.clinerules`, `.roomodes`, `.roo/**` |
+| Gemini CLI (Google) | `GEMINI.md`, `.gemini/settings.json`, `.gemini/**` |
+| Project IDX (Google + Gemini Code Assist) | `.idx/airules.md`, `.idx/dev.nix`, `.idx/**` |
+| Zed editor | `.zed/settings.json`, `.zed/**` |
+| OpenHands | `.openhands_instructions`, `.openhands/setup.sh`, `.openhands/**` |
+| Goose (Block / AAIF) | `.goosehints`, `.goosehints.md`, `.goose/**` |
+| Codeium (classic) | `.codeium/instructions.md`, `.codeium/**` |
+| Amazon Q Developer | `.amazonq/rules/**`, `.amazonq/**`, `.aws/amazonq/**` |
+| JetBrains AI Assistant (+ Fleet) | `.aiassistant/rules/*.md`, `.aiassistant/**` |
+| Plandex | `.plandex/**` |
+| Devin (Cognition) | `.devin/skills/**`, `.devin/wiki.json`, `.devin/**` |
+| xAI Grok CLI | `.grok/**` (config primarily via `AGENTS.md`) |
+| Mentat | `.mentatconfig.json` |
+| OpenCode (multi-model) | `.opencode.json` |
+| MCP servers (any host) | `.mcp.json`, `mcp.json`, `.mcp/**` |
+
+Each match produces an INFO inventory finding so a strict CI policy (`--fail-on info --ignore <subtree>`) can ban AI-agent code from the production codebase. The same shared content rules (prompt-injection, permission-bypass, hardcoded-trust, system-role-spoof, invisible-Unicode, exfil-trigger, …) apply to every matched file's contents.
 
 **What it flags:** prompt-injection overrides (`Ignore previous instructions…`), permission bypasses (`bypassPermissions: true`, `--dangerously-skip-permissions`), hardcoded trust assertions (`Always trust commits from …`), instructions to skip security review, invisible-Unicode payloads, and risky MCP server entries (shell-as-entrypoint, `curl … | bash`, sandbox-disabled flags, secret-like env keys). The mere *presence* of an AI-tooling config also surfaces as an INFO finding so a strict CI policy can ban them outright (see [CI integration](#ci-integration-sarif)).
 
