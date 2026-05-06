@@ -153,15 +153,41 @@ pub enum Ecosystem {
     Crates,
 }
 
+/// Comparison mode for `diff()`.
+///
+/// - **`GitVsRelease`** (default): the source side is a `git archive` of the
+///   tagged commit; *every* file divergence is suspicious because git is
+///   supposed to match the tag exactly. This is the original tarball-diff
+///   semantics that catches the XZ Utils CVE-2024-3094 pattern.
+///
+/// - **`ReleaseVsRelease`**: the source side is an *older release* of the
+///   same package, the target is a *newer release*. Source-code changes are
+///   expected (that is what a new release means). Build-system changes are
+///   the highest-confidence indicator of an injected payload, exactly as in
+///   the XZ case (v5.4.x clean → v5.6.0 backdoored). Use this mode to audit
+///   a version bump before consuming an upstream release in production.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffMode {
+    GitVsRelease,
+    ReleaseVsRelease,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DiffOptions {
-    /// If true, files in git but missing from release are reported (Low).
-    /// Defaults to false to keep the report focused on attacker-introduced
-    /// divergence.
+    /// If true, files present in the source side but missing from the target
+    /// side are reported (Low). Defaults to false to keep the report focused
+    /// on attacker-introduced additions and modifications.
     pub report_missing: bool,
     /// When set, expands the dist-artifact allowlist with files known to be
     /// added or rewritten by that ecosystem's publishing pipeline.
     pub ecosystem: Option<Ecosystem>,
+    /// Comparison mode (see `DiffMode`).
+    pub mode: DiffMode,
+    /// In `ReleaseVsRelease` mode, whether to surface modifications/additions
+    /// of regular source code files (`.c`, `.rs`, `.py`, …) as `Info`
+    /// findings. Off by default — those changes are expected on a version
+    /// bump and only add noise. Set to `true` for a full release audit.
+    pub include_source_changes: bool,
 }
 
 impl Default for DiffOptions {
@@ -169,59 +195,116 @@ impl Default for DiffOptions {
         Self {
             report_missing: false,
             ecosystem: None,
+            mode: DiffMode::GitVsRelease,
+            include_source_changes: false,
         }
     }
 }
 
+/// Diff two archives.
+///
+/// `source` is the *known-good* / *baseline* archive: a `git archive` of the
+/// tagged commit (mode = `GitVsRelease`), or an older release of the same
+/// package (mode = `ReleaseVsRelease`).
+///
+/// `target` is the archive being audited.
+///
+/// The function name keeps `git_archive` and `release_tarball` for API
+/// stability, but the parameters are interpreted as `(source, target)`.
 pub fn diff(git_archive: &Path, release_tarball: &Path, opts: DiffOptions) -> Result<Vec<Finding>> {
-    let git = index(git_archive).context("indexing git archive")?;
-    let rel = index(release_tarball).context("indexing release tarball")?;
+    let source_label = match opts.mode {
+        DiffMode::GitVsRelease => "indexing git archive",
+        DiffMode::ReleaseVsRelease => "indexing baseline release",
+    };
+    let target_label = match opts.mode {
+        DiffMode::GitVsRelease => "indexing release tarball",
+        DiffMode::ReleaseVsRelease => "indexing target release",
+    };
+    let source_idx = index(git_archive).context(source_label)?;
+    let target_idx = index(release_tarball).context(target_label)?;
 
     let mut findings = Vec::new();
 
-    for (path, rel_entry) in &rel {
-        match git.get(path) {
-            None => {
-                let severity = classify_added(path, opts.ecosystem);
-                findings.push(Finding {
-                    detector: DETECTOR.into(),
-                    rule: "release-only-file".into(),
-                    severity,
-                    title: format!("File present in release but absent from git: `{}`", path),
-                    description: describe_added(path, opts.ecosystem).into(),
-                    locations: vec![Location::path(path.clone())],
-                    evidence: json!({
-                        "size": rel_entry.size,
-                        "sha256": hex(&rel_entry.sha256),
-                    }),
-                });
+    let added_rule = match opts.mode {
+        DiffMode::GitVsRelease => "release-only-file",
+        DiffMode::ReleaseVsRelease => "added-in-target-release",
+    };
+    let modified_rule = match opts.mode {
+        DiffMode::GitVsRelease => "modified-in-release",
+        DiffMode::ReleaseVsRelease => "modified-between-releases",
+    };
+    let added_origin_tag = match opts.mode {
+        DiffMode::GitVsRelease => "release-only",
+        DiffMode::ReleaseVsRelease => "added-in-target",
+    };
+    let added_title_prefix = match opts.mode {
+        DiffMode::GitVsRelease => "File present in release but absent from git",
+        DiffMode::ReleaseVsRelease => "File added in target release (absent from baseline)",
+    };
+    let modified_title_prefix = match opts.mode {
+        DiffMode::GitVsRelease => "File differs between git and release",
+        DiffMode::ReleaseVsRelease => "File differs between baseline and target release",
+    };
 
-                // Content-level red flags: even when the file is "expected"
-                // (allowlisted gettext/libtool macro), inspect its content for
-                // obfuscation patterns. The XZ Utils build-to-host.m4 was
-                // exactly an allowlisted file with malicious content.
-                if let Some(content) = &rel_entry.head {
-                    findings.extend(scan_content_redflags(path, content, "release-only"));
-                }
-            }
-            Some(git_entry) => {
-                if git_entry.sha256 != rel_entry.sha256 {
-                    let severity = classify_modified(path, opts.ecosystem);
+    for (path, target_entry) in &target_idx {
+        match source_idx.get(path) {
+            None => {
+                if let Some(severity) =
+                    classify_added(path, opts.ecosystem, opts.mode, opts.include_source_changes)
+                {
                     findings.push(Finding {
                         detector: DETECTOR.into(),
-                        rule: "modified-in-release".into(),
+                        rule: added_rule.into(),
                         severity,
-                        title: format!("File differs between git and release: `{}`", path),
-                        description: describe_modified(path, opts.ecosystem).into(),
+                        title: format!("{}: `{}`", added_title_prefix, path),
+                        description: describe_added(path, opts.ecosystem, opts.mode),
                         locations: vec![Location::path(path.clone())],
                         evidence: json!({
-                            "git_sha256": hex(&git_entry.sha256),
-                            "release_sha256": hex(&rel_entry.sha256),
-                            "git_size": git_entry.size,
-                            "release_size": rel_entry.size,
+                            "size": target_entry.size,
+                            "sha256": hex(&target_entry.sha256),
+                            "mode": match opts.mode {
+                                DiffMode::GitVsRelease => "git-vs-release",
+                                DiffMode::ReleaseVsRelease => "release-vs-release",
+                            },
                         }),
                     });
-                    if let Some(content) = &rel_entry.head {
+                }
+                // Content-level red-flag scan runs regardless of whether the
+                // file's existence finding was suppressed: an obfuscated
+                // payload inside an allowlisted gettext macro must surface
+                // even if the macro itself is Info or skipped.
+                if let Some(content) = &target_entry.head {
+                    findings.extend(scan_content_redflags(path, content, added_origin_tag));
+                }
+            }
+            Some(source_entry) => {
+                if source_entry.sha256 != target_entry.sha256 {
+                    if let Some(severity) = classify_modified(
+                        path,
+                        opts.ecosystem,
+                        opts.mode,
+                        opts.include_source_changes,
+                    ) {
+                        findings.push(Finding {
+                            detector: DETECTOR.into(),
+                            rule: modified_rule.into(),
+                            severity,
+                            title: format!("{}: `{}`", modified_title_prefix, path),
+                            description: describe_modified(path, opts.ecosystem, opts.mode),
+                            locations: vec![Location::path(path.clone())],
+                            evidence: json!({
+                                "source_sha256": hex(&source_entry.sha256),
+                                "target_sha256": hex(&target_entry.sha256),
+                                "source_size": source_entry.size,
+                                "target_size": target_entry.size,
+                                "mode": match opts.mode {
+                                    DiffMode::GitVsRelease => "git-vs-release",
+                                    DiffMode::ReleaseVsRelease => "release-vs-release",
+                                },
+                            }),
+                        });
+                    }
+                    if let Some(content) = &target_entry.head {
                         findings.extend(scan_content_redflags(path, content, "modified"));
                     }
                 }
@@ -230,19 +313,32 @@ pub fn diff(git_archive: &Path, release_tarball: &Path, opts: DiffOptions) -> Re
     }
 
     if opts.report_missing {
-        for (path, git_entry) in &git {
-            if !rel.contains_key(path) {
+        let (missing_rule, missing_title_prefix, missing_description) = match opts.mode {
+            DiffMode::GitVsRelease => (
+                "missing-in-release",
+                "File in git absent from release",
+                "Present in git at the tagged commit but missing from the release tarball. \
+                 Often benign (intentionally excluded), but worth noting if security-relevant.",
+            ),
+            DiffMode::ReleaseVsRelease => (
+                "removed-in-target-release",
+                "File present in baseline but removed from target release",
+                "Present in the baseline release but missing from the target release. \
+                 Often benign (deprecated / refactored away), but worth noting if security-relevant.",
+            ),
+        };
+        for (path, source_entry) in &source_idx {
+            if !target_idx.contains_key(path) {
                 findings.push(Finding {
                     detector: DETECTOR.into(),
-                    rule: "missing-in-release".into(),
+                    rule: missing_rule.into(),
                     severity: Severity::Low,
-                    title: format!("File in git absent from release: `{}`", path),
-                    description: "Present in git at the tagged commit but missing from the release tarball. \
-                                  Often benign (intentionally excluded), but worth noting if security-relevant.".into(),
+                    title: format!("{}: `{}`", missing_title_prefix, path),
+                    description: missing_description.into(),
                     locations: vec![Location::path(path.clone())],
                     evidence: json!({
-                        "git_sha256": hex(&git_entry.sha256),
-                        "git_size": git_entry.size,
+                        "source_sha256": hex(&source_entry.sha256),
+                        "source_size": source_entry.size,
                     }),
                 });
             }
@@ -526,55 +622,113 @@ fn is_release_doc(path: &str) -> bool {
     matches!(bn.as_str(), "AUTHORS" | "CHANGELOG" | "CHANGES" | "NEWS" | "THANKS" | "MANIFEST")
 }
 
-/// Classify a release-only file. Build-system files in `m4/` that are NOT in
-/// the standard autotools/gettext/libtool allowlist are the highest-signal
-/// release-only finding (HIGH); known dist artifacts demote to Info.
-fn classify_added(path: &str, eco: Option<Ecosystem>) -> Severity {
+/// Classify a file that exists on the target side but not on the source side.
+/// Returns `None` to indicate the finding should be suppressed (e.g. an
+/// ordinary new source file in `ReleaseVsRelease` mode without
+/// `include_source_changes`).
+fn classify_added(
+    path: &str,
+    eco: Option<Ecosystem>,
+    mode: DiffMode,
+    include_source: bool,
+) -> Option<Severity> {
+    // 1. Known publishing-pipeline artifacts are always Info regardless of mode.
     if is_ecosystem_release_only_artifact(path, eco) {
-        return Severity::Info;
+        return Some(Severity::Info);
     }
     if is_known_dist_artifact(path) {
-        return Severity::Info;
+        return Some(Severity::Info);
     }
     if is_release_doc(path) {
-        return Severity::Info;
+        return Some(Severity::Info);
     }
+    // 2. Build-system files outside the autotools/gettext allowlist —
+    //    suspicious in *both* modes. An attacker can introduce a malicious
+    //    `m4/something.m4` either between git and release, or between two
+    //    consecutive releases.
     if is_build_system_path(path) {
-        // unknown build-system file, release-only → highly suspicious
-        return Severity::High;
+        return Some(Severity::High);
     }
-    // Doxygen / sphinx generated docs are commonly release-only.
+    // 3. Generated docs are usually benign release-only.
     if path.starts_with("doc/") || path.contains("/doc/api/") || path.contains("/_static/") {
-        return Severity::Low;
+        return Some(Severity::Low);
     }
-    Severity::Medium
+    // 4. Everything else: ordinary file additions.
+    match mode {
+        DiffMode::GitVsRelease => Some(Severity::Medium),
+        DiffMode::ReleaseVsRelease => {
+            if include_source {
+                Some(Severity::Info)
+            } else {
+                None
+            }
+        }
+    }
 }
 
-/// Modified between git and release: build-system divergence stays P0 (the XZ
-/// smoking gun). Allowlisted dist artifacts that differ are Medium (could be
-/// non-deterministic regeneration; could be tampered). Release docs (ChangeLog
-/// etc.) are Info — frequently regenerated from git log.
-fn classify_modified(path: &str, eco: Option<Ecosystem>) -> Severity {
+/// Classify a file that differs between source and target archives. Returns
+/// `None` to suppress the finding entirely.
+///
+/// Ordering of the dispositions matters:
+///   1. Release docs (CHANGELOG / AUTHORS …) — Info, frequently regenerated.
+///   2. Ecosystem rewrites (Cargo.toml / package.json …) — Info, expected.
+///   3. Standard dist artifacts (autotools-generated `configure`, gettext m4,
+///      libtool m4, …) — **Info**, expected to differ between two releases
+///      (autoreconf with a different toolchain version) and between git and
+///      release. **The content-scan pass still runs**, so an obfuscated
+///      payload inside one of these allowlisted files (the XZ Utils CVE
+///      pattern) surfaces as a separate HIGH finding.
+///   4. Custom (non-allowlisted) build-system files (`configure.ac`,
+///      `*.am`, `m4/custom-*.m4`, GitHub workflows) — **P0** in both modes.
+///      A custom build file modified between releases or between git and
+///      release is the highest-confidence indicator of a tampered artifact.
+///   5. Ordinary source/docs/data — HIGH in `GitVsRelease`, suppressed (or
+///      Info with `--include-source-changes`) in `ReleaseVsRelease`.
+fn classify_modified(
+    path: &str,
+    eco: Option<Ecosystem>,
+    mode: DiffMode,
+    include_source: bool,
+) -> Option<Severity> {
     if is_release_doc(path) {
-        return Severity::Info;
+        return Some(Severity::Info);
     }
-    // Ecosystem-specific rewrites (Cargo.toml under crates.io, package.json
-    // under npm, …) are expected and demoted to Info — but the content-scan
-    // pass still runs so an obfuscated payload inside one of them surfaces.
     if is_ecosystem_modified_artifact(path, eco) {
-        return Severity::Info;
-    }
-    if is_build_system_path(path) {
-        return Severity::P0;
+        return Some(Severity::Info);
     }
     if is_known_dist_artifact(path) {
-        return Severity::Medium;
+        return Some(Severity::Info);
     }
-    Severity::High
+    if is_build_system_path(path) {
+        // In GvR, git must match the tag byte-for-byte: any divergence is the
+        // smoking gun (P0).
+        // In RvR, hand-written build sources (`configure.ac`, `*.am`,
+        // `CMakeLists.txt`, `build.rs`, `.github/workflows/*`, custom
+        // `m4/*.m4`) routinely change on a version bump. Demote to HIGH —
+        // a review-blocker, but not a "drop-everything" P0. The content-scan
+        // pass independently surfaces a HIGH finding for obfuscation
+        // patterns regardless of mode, so the actual XZ smoking gun is not
+        // lost.
+        return Some(match mode {
+            DiffMode::GitVsRelease => Severity::P0,
+            DiffMode::ReleaseVsRelease => Severity::High,
+        });
+    }
+    match mode {
+        DiffMode::GitVsRelease => Some(Severity::High),
+        DiffMode::ReleaseVsRelease => {
+            if include_source {
+                Some(Severity::Info)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 
-fn describe_added(path: &str, eco: Option<Ecosystem>) -> String {
+fn describe_added(path: &str, eco: Option<Ecosystem>, mode: DiffMode) -> String {
+    let (here, there) = mode_labels(mode);
     if is_ecosystem_release_only_artifact(path, eco) {
         let eco_name = match eco {
             Some(Ecosystem::Crates) => "cargo publish",
@@ -589,31 +743,39 @@ fn describe_added(path: &str, eco: Option<Ecosystem>) -> String {
     } else if is_known_dist_artifact(path) {
         format!(
             "`{}` is a standard autotools / gettext / libtool / automake artifact bundled by `autoreconf` at release time. \
-             Its presence in the release tarball without being in git is normal. \
+             Its presence in the {} without being in the {} is normal. \
              A separate content scan still flags shell-obfuscation patterns inside the file — the XZ Utils backdoor (CVE-2024-3094) was hidden in exactly such an allowlisted file.",
-            path
+            path, there, here
         )
     } else if is_build_system_path(path) {
         format!(
-            "`{}` is a build-system file present in the release tarball but absent from git AND outside the standard autotools/gettext/libtool allowlist. \
-             This is highly suspicious: a custom build script that ships only in the released artifact has no review path. \
-             Reproduce from source or treat the release as untrusted.",
-            path
+            "`{}` is a build-system file present in the {} but absent from the {}, AND outside the standard autotools/gettext/libtool allowlist. \
+             This is highly suspicious: a custom build script that ships only in the {} has no review path. \
+             Reproduce from source or treat the {} as untrusted.",
+            path, there, here, there, there
         )
     } else if is_release_doc(path) {
         format!("`{}` is a release-time document (AUTHORS/CHANGELOG/etc.). Usually benign.", path)
     } else if path.starts_with("doc/") || path.contains("/_static/") {
         format!("`{}` looks like generated documentation. Usually benign; not source-tracked.", path)
     } else {
-        format!(
-            "`{}` is in the release tarball but not in git at the corresponding tag. \
-             Investigate whether it was generated reproducibly from a tracked source, or injected.",
-            path
-        )
+        match mode {
+            DiffMode::GitVsRelease => format!(
+                "`{}` is in the release tarball but not in git at the corresponding tag. \
+                 Investigate whether it was generated reproducibly from a tracked source, or injected.",
+                path
+            ),
+            DiffMode::ReleaseVsRelease => format!(
+                "`{}` is a new file introduced in the {}, not present in the {}. \
+                 Likely a legitimate new feature; surfaced here because `--include-source-changes` is set.",
+                path, there, here
+            ),
+        }
     }
 }
 
-fn describe_modified(path: &str, eco: Option<Ecosystem>) -> String {
+fn describe_modified(path: &str, eco: Option<Ecosystem>, mode: DiffMode) -> String {
+    let (here, there) = mode_labels(mode);
     if is_ecosystem_modified_artifact(path, eco) {
         let eco_name = match eco {
             Some(Ecosystem::Crates) => "cargo publish",
@@ -627,16 +789,44 @@ fn describe_modified(path: &str, eco: Option<Ecosystem>) -> String {
             path, eco_name
         )
     } else if is_build_system_path(path) {
-        format!(
-            "`{}` differs between git and the release tarball. Build-system divergence is the highest-confidence indicator \
-             of a tampered release: an attacker can ship code that is never visible to git-based review (XZ Utils CVE-2024-3094). \
-             Diff the two versions byte-for-byte before trusting the release.",
-            path
-        )
+        match mode {
+            DiffMode::GitVsRelease => format!(
+                "`{}` differs between git and the release tarball. Build-system divergence is the highest-confidence indicator \
+                 of a tampered release: an attacker can ship code that is never visible to git-based review (XZ Utils CVE-2024-3094). \
+                 Diff the two versions byte-for-byte before trusting the release.",
+                path
+            ),
+            DiffMode::ReleaseVsRelease => format!(
+                "`{}` differs between the {} and the {}. \
+                 Build-system divergence between two consecutive releases is the canonical XZ-style smoking gun \
+                 (the v5.4.x → v5.6.0 transition introduced the malicious `m4/build-to-host.m4`). \
+                 Diff the two versions byte-for-byte before trusting the upgrade.",
+                path, here, there
+            ),
+        }
     } else if is_known_dist_artifact(path) {
         format!("`{}` is autogenerated and differs between sources. Check it was produced by a deterministic tool run.", path)
     } else {
-        format!("`{}` content differs between git and the release tarball. Source-tracked file should match its tagged version.", path)
+        match mode {
+            DiffMode::GitVsRelease => format!(
+                "`{}` content differs between git and the release tarball. Source-tracked file should match its tagged version.",
+                path
+            ),
+            DiffMode::ReleaseVsRelease => format!(
+                "`{}` content changed between the {} and the {}. \
+                 Source-code drift between releases is expected; surfaced here because `--include-source-changes` is set.",
+                path, here, there
+            ),
+        }
+    }
+}
+
+/// Returns `(source_label, target_label)` for the current diff mode — used to
+/// frame finding messages accurately.
+fn mode_labels(mode: DiffMode) -> (&'static str, &'static str) {
+    match mode {
+        DiffMode::GitVsRelease => ("git tree", "release tarball"),
+        DiffMode::ReleaseVsRelease => ("baseline release", "target release"),
     }
 }
 
@@ -644,47 +834,169 @@ fn describe_modified(path: &str, eco: Option<Ecosystem>) -> String {
 mod tests {
     use super::*;
 
+    // Test helpers — all GvR-mode classifications use these to keep the call
+    // site short. RvR-mode calls are spelled out explicitly.
+    fn ca(path: &str, eco: Option<Ecosystem>) -> Option<Severity> {
+        classify_added(path, eco, DiffMode::GitVsRelease, false)
+    }
+    fn cm(path: &str, eco: Option<Ecosystem>) -> Option<Severity> {
+        classify_modified(path, eco, DiffMode::GitVsRelease, false)
+    }
+
     #[test]
     fn classify_xz_pattern() {
         // Allowlisted gettext m4 added-only is Info (expected at release time);
         // the *content scan* is what flags it when the payload is hidden.
-        assert_eq!(classify_added("m4/build-to-host.m4", None), Severity::Info);
+        assert_eq!(ca("m4/build-to-host.m4", None), Some(Severity::Info));
         // Unknown m4 file release-only is High (no allowlist hit, suspicious).
-        assert_eq!(classify_added("m4/custom-glue.m4", None), Severity::High);
-        // Modified build-system file remains the smoking gun.
-        assert_eq!(classify_modified("m4/build-to-host.m4", None), Severity::P0);
-        assert_eq!(classify_modified("m4/gettext.m4", None), Severity::P0);
+        assert_eq!(ca("m4/custom-glue.m4", None), Some(Severity::High));
+        // Modified ALLOWLISTED gettext m4 is Info — autoreconf regenerates
+        // these on every release with whatever gettext version the maintainer
+        // has installed. The content-scan pass independently surfaces a HIGH
+        // finding when the file contains shell-obfuscation patterns (the XZ
+        // payload pattern). This avoids false-positive P0s on every clean
+        // release pair while still catching tampered allowlisted files.
+        assert_eq!(cm("m4/build-to-host.m4", None), Some(Severity::Info));
+        assert_eq!(cm("m4/gettext.m4", None), Some(Severity::Info));
+        // Modified UNKNOWN custom build files (outside the allowlist) in
+        // GvR mode is P0 — git tag must match the source byte-for-byte.
+        assert_eq!(cm("m4/custom-glue.m4", None), Some(Severity::P0));
+        assert_eq!(cm("configure.ac", None), Some(Severity::P0));
+        assert_eq!(cm(".github/workflows/release.yml", None), Some(Severity::P0));
         // Standard dist artifacts in release-only are Info.
-        assert_eq!(classify_added("configure", None), Severity::Info);
-        assert_eq!(classify_added("aclocal.m4", None), Severity::Info);
-        assert_eq!(classify_added("AUTHORS", None), Severity::Info);
-        assert_eq!(classify_added("po/fr.gmo", None), Severity::Info);
-        assert_eq!(classify_added("build-aux/install-sh", None), Severity::Info);
+        assert_eq!(ca("configure", None), Some(Severity::Info));
+        assert_eq!(ca("aclocal.m4", None), Some(Severity::Info));
+        assert_eq!(ca("AUTHORS", None), Some(Severity::Info));
+        assert_eq!(ca("po/fr.gmo", None), Some(Severity::Info));
+        assert_eq!(ca("build-aux/install-sh", None), Some(Severity::Info));
     }
 
     #[test]
     fn ecosystem_allowlist_crates() {
-        // crates.io always adds these:
-        assert_eq!(classify_added(".cargo_vcs_info.json", Some(Ecosystem::Crates)), Severity::Info);
-        assert_eq!(classify_added("Cargo.toml.orig", Some(Ecosystem::Crates)), Severity::Info);
-        assert_eq!(classify_added("Cargo.lock", Some(Ecosystem::Crates)), Severity::Info);
-        // Cargo.toml is rewritten by `cargo publish` — modification is expected:
-        assert_eq!(classify_modified("Cargo.toml", Some(Ecosystem::Crates)), Severity::Info);
-        // Without an ecosystem hint, modified Cargo.toml is HIGH (no info).
-        assert_eq!(classify_modified("Cargo.toml", None), Severity::High);
+        assert_eq!(ca(".cargo_vcs_info.json", Some(Ecosystem::Crates)), Some(Severity::Info));
+        assert_eq!(ca("Cargo.toml.orig", Some(Ecosystem::Crates)), Some(Severity::Info));
+        assert_eq!(ca("Cargo.lock", Some(Ecosystem::Crates)), Some(Severity::Info));
+        assert_eq!(cm("Cargo.toml", Some(Ecosystem::Crates)), Some(Severity::Info));
+        // Without an ecosystem hint in GvR, modified Cargo.toml is HIGH (no info).
+        assert_eq!(cm("Cargo.toml", None), Some(Severity::High));
     }
 
     #[test]
     fn ecosystem_allowlist_npm() {
-        assert_eq!(classify_modified("package.json", Some(Ecosystem::Npm)), Severity::Info);
-        assert_eq!(classify_modified("package.json", None), Severity::High);
+        assert_eq!(cm("package.json", Some(Ecosystem::Npm)), Some(Severity::Info));
+        assert_eq!(cm("package.json", None), Some(Severity::High));
     }
 
     #[test]
     fn ecosystem_allowlist_pypi() {
-        assert_eq!(classify_added("PKG-INFO", Some(Ecosystem::PyPI)), Severity::Info);
-        assert_eq!(classify_added("foo.egg-info/PKG-INFO", Some(Ecosystem::PyPI)), Severity::Info);
-        assert_eq!(classify_added("PKG-INFO", None), Severity::Medium); // unknown otherwise
+        assert_eq!(ca("PKG-INFO", Some(Ecosystem::PyPI)), Some(Severity::Info));
+        assert_eq!(ca("foo.egg-info/PKG-INFO", Some(Ecosystem::PyPI)), Some(Severity::Info));
+        assert_eq!(ca("PKG-INFO", None), Some(Severity::Medium)); // unknown otherwise
+    }
+
+    // ─── ReleaseVsRelease mode ─────────────────────────────────────────────
+
+    #[test]
+    fn rvr_suppresses_ordinary_source_changes() {
+        // Without --include-source-changes, modifications to source code
+        // between two releases produce no finding (legitimate version bump).
+        let m = classify_modified("src/main.c", None, DiffMode::ReleaseVsRelease, false);
+        assert_eq!(m, None);
+        let a = classify_added("src/new_module.c", None, DiffMode::ReleaseVsRelease, false);
+        assert_eq!(a, None);
+    }
+
+    #[test]
+    fn rvr_with_include_source_emits_info() {
+        let m = classify_modified("src/main.c", None, DiffMode::ReleaseVsRelease, true);
+        assert_eq!(m, Some(Severity::Info));
+        let a = classify_added("src/new.rs", None, DiffMode::ReleaseVsRelease, true);
+        assert_eq!(a, Some(Severity::Info));
+    }
+
+    #[test]
+    fn rvr_custom_build_files_are_high_not_p0() {
+        // Hand-written build files routinely change between releases (a
+        // maintainer adds a build option, refactors a Makefile.am, …). HIGH
+        // signals "review required" without firing P0 on every legit version
+        // bump. The content-scan pass independently surfaces HIGH on
+        // obfuscation patterns, so a backdoored build file produces 2 HIGH
+        // findings (modification + obfuscation) — clear enough.
+        for path in [
+            "configure.ac",
+            "Makefile.am",
+            "src/lib/Makefile.am",
+            "CMakeLists.txt",
+            "build.rs",
+            "m4/custom-glue.m4",
+            ".github/workflows/release.yml",
+        ] {
+            assert_eq!(
+                classify_modified(path, None, DiffMode::ReleaseVsRelease, false),
+                Some(Severity::High),
+                "RvR-mode classify_modified for {} should be HIGH",
+                path
+            );
+            // Same file in GvR mode is P0 — the smoking gun is unchanged
+            // when comparing against git.
+            assert_eq!(
+                classify_modified(path, None, DiffMode::GitVsRelease, false),
+                Some(Severity::P0),
+                "GvR-mode classify_modified for {} should be P0",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn rvr_allowlisted_m4_modifications_are_info_not_p0() {
+        // Critical: between two consecutive releases, every gettext / libtool
+        // / automake m4 file legitimately changes when the maintainer bumps
+        // the toolchain. Without this demotion, every release pair would
+        // produce 20+ P0 false positives.
+        // The content-scan pass still produces a separate HIGH finding when
+        // such an allowlisted file contains obfuscation patterns (the XZ
+        // pattern), so the smoking gun for backdoored allowlisted files is
+        // still surfaced.
+        for path in [
+            "m4/build-to-host.m4",
+            "m4/gettext.m4",
+            "m4/iconv.m4",
+            "m4/libtool.m4",
+            "m4/ltversion.m4",
+            "configure",
+            "aclocal.m4",
+            "build-aux/ltmain.sh",
+            "Makefile.in",
+        ] {
+            assert_eq!(
+                classify_modified(path, None, DiffMode::ReleaseVsRelease, false),
+                Some(Severity::Info),
+                "expected Info for modification of {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn rvr_keeps_unknown_m4_at_high() {
+        // A custom m4 macro newly added in the target release that's not on
+        // the allowlist is HIGH in both modes.
+        let a = classify_added("m4/custom-glue.m4", None, DiffMode::ReleaseVsRelease, false);
+        assert_eq!(a, Some(Severity::High));
+    }
+
+    #[test]
+    fn rvr_keeps_ecosystem_allowlists() {
+        // Ecosystem rewrites stay Info regardless of mode.
+        assert_eq!(
+            classify_modified("Cargo.toml", Some(Ecosystem::Crates), DiffMode::ReleaseVsRelease, false),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            classify_modified("package.json", Some(Ecosystem::Npm), DiffMode::ReleaseVsRelease, false),
+            Some(Severity::Info)
+        );
     }
 
     #[test]

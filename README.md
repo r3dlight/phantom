@@ -141,7 +141,7 @@ Phantom is one tool in a fast-moving space. Honest positioning matters.
 
 ### Where the market is mature and Phantom is a competent peer, not a leader
 
-- **`mcp-audit`** — the MCP scanning space is now well-served by [`mcp-scan`](https://github.com/invariantlabs-ai/mcp-scan), [Cisco MCP Scanner](https://github.com/cisco/cisco-mcp-scanner), [Snyk Agent Scan](https://github.com/snyk/cli) (formerly mcp-scan), [Proximity](https://github.com/fr0gger/Proximity), Adam Dudley's `mcp-audit`, mcpscan.ai, and Cisco's VS Code "AI Agent Security Scanner". Phantom's `mcp-audit` covers the static-config layer competently and emits the same unified SARIF the rest of the suite uses, but it is not the deepest MCP scanner available. **If your only need is MCP audit, install `mcp-scan` directly.** Phantom's value here is integration, not depth — interop with these tools is on the Roadmap.
+- **`mcp-audit`** — the MCP scanning space is now well-served by [`mcp-scan`](https://github.com/invariantlabs-ai/mcp-scan), [Cisco MCP Scanner](https://github.com/cisco/cisco-mcp-scanner), [Snyk Agent Scan](https://github.com/snyk/cli) (formerly mcp-scan), [Proximity](https://github.com/fr0gger/Proximity), [Nova-Proximity](https://github.com/Nova-Hunting/nova-proximity) (NOVA rules DSL, multi-LLM evaluator, full MCP 2025-11-25 spec, plus Agent Skills support — under GPL-3.0), Adam Dudley's `mcp-audit`, mcpscan.ai, and Cisco's VS Code "AI Agent Security Scanner". Phantom's `mcp-audit` covers the static-config layer competently and emits the same unified SARIF the rest of the suite uses, but it is **not** the deepest MCP scanner available. **If your only need is MCP audit, install Nova-Proximity or mcp-scan directly.** Phantom's value here is integration with the rest of the suite, not depth — interop (importing Nova-Proximity / mcp-scan SARIF/JSON) is on the Roadmap.
 
 ### Where Phantom is research-grade, not yet production-ready
 
@@ -239,9 +239,16 @@ phantom promptinjection . --fail-on p0                           # only fail CI 
 
 ### `phantom tarball-diff …`
 
-> Diff a `git archive` of a tag against the released tarball for that tag. **Use this whenever you're about to consume an upstream release tarball in production**, or as a CI gate on your own releases. The marquee detector — see [Where Phantom is unique](#where-phantom-is-unique-and-where-it-isnt).
+> Diff a `git archive` of a tag against the released tarball, **or** diff two consecutive releases of the same package against each other. **Use this whenever you're about to consume an upstream release tarball in production**, or as a CI gate on your own releases. The marquee detector — see [Where Phantom is unique](#where-phantom-is-unique-and-where-it-isnt).
 
-#### Spec syntax (`--release`)
+#### Two modes
+
+| Mode | When to use |
+|------|-------------|
+| **`git-vs-release`** (default) | You have a clean `git archive` of the tag and want to detect any deviation in the published tarball (the XZ Utils CVE-2024-3094 pattern). |
+| **`release-vs-release`** | You're about to bump an upstream dependency from `v1.0` to `v1.1` and want to audit only what changed in the build system between the two releases. Equivalent to *"would this version bump introduce malicious build glue?"* — works without needing access to a clean git source. |
+
+#### Spec syntax (`--release` / `--baseline`)
 
 ```text
 owner/repo[@tag]            # default scheme = github
@@ -254,12 +261,13 @@ crates:package[@version]
 
 `--release` auto-fetches both the published artifact and (best-effort) the matching `git archive` from the registry's repository URL, trying common tag patterns (`v<ver>`, `<ver>`, `<pkg>-<ver>`, `<pkg>@<ver>`). When auto-resolution fails, override the source side with `--git-archive <PATH>`.
 
-#### Three invocation shapes
+#### Five invocation shapes
 
 ```sh
+# git-vs-release modes
 # 1. Both archives provided locally:
 phantom tarball-diff \
-    --git-archive    git-source.tar.gz \
+    --git-archive     git-source.tar.gz \
     --release-tarball release-asset.tar.gz
 
 # 2. Auto-fetch the release AND the git source from a registry:
@@ -269,20 +277,34 @@ phantom tarball-diff --release pypi:requests@2.31.0              # PyPI sdist
 phantom tarball-diff --release crates:serde@1.0.193              # crates.io
 phantom tarball-diff --release sigstore/cosign                   # latest release
 
-# 3. Auto-fetch the release, override the git source manually:
+# 3. Auto-fetch release, override the git source manually:
 phantom tarball-diff --release npm:my-pkg@1.2.3 --git-archive ./local-source.tar.gz
+
+# release-vs-release modes
+# 4. Auto-fetch both sides, compare two registry releases of the same package:
+phantom tarball-diff --baseline tukaani-project/xz@v5.4.6 --release tukaani-project/xz@v5.4.7
+phantom tarball-diff --baseline crates:once_cell@1.18.0 --release crates:once_cell@1.19.0
+phantom tarball-diff --baseline npm:axios@1.6.0 --release npm:axios@1.6.1
+
+# 5. Both archives provided locally, compare two releases:
+phantom tarball-diff --baseline-tarball v1.0.tar.gz --release-tarball v1.1.tar.gz
 ```
 
 #### Other flags
 
-- `--report-missing` — also list files present in git but absent from the release (Low severity; off by default).
+- `--report-missing` — also list files present on the source side but missing from the target side (Low severity; off by default).
+- `--include-source-changes` — *(release-vs-release only)* surface ordinary source-code modifications/additions as Info findings. Off by default — those changes are expected on a version bump and only add noise. Set this when running a comprehensive audit.
 
 #### What it flags
 
-- **P0 — Modified build-system file** (the XZ smoking gun): `m4/*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, `.github/workflows/*` differs between git and release.
-- **HIGH — Build-file obfuscation**: shell patterns (`eval | tr`, `base64 -d`, long base64/hex blobs, `xxd -r`, `printf '\x…'`) inside any build-system file in the release, *even if the file is on the standard autotools/gettext allowlist* (this is what catches CVE-2024-3094).
-- **HIGH — Unknown m4 file** present only in the release.
-- **MEDIUM/INFO** — known autotools-generated files / docs / translations.
+| Severity | git-vs-release | release-vs-release |
+|----------|----------------|--------------------|
+| **P0** | Custom build-system file (e.g. `configure.ac`, `Makefile.am`, `build.rs`, custom `m4/*.m4`, `.github/workflows/*`) **modified** between git and release — the XZ Utils smoking gun. | *(reserved — git-only signal)* |
+| **HIGH** | Unknown `m4/*.m4` file present in the release but absent from the git tree, OR build-file obfuscation patterns (`eval \| tr`, `base64 -d`, long base64/hex blobs, `xxd -r`, `printf '\x…'`) inside any build-system file *even if it is on the autotools/gettext allowlist* — this is what catches the actual XZ payload. | Same — plus custom build files modified between releases (review-required, not P0 because version bumps legitimately edit `Makefile.am` etc.). |
+| **MEDIUM** | Other source/data files differing between git and release. | Suppressed by default; surfaces as Info with `--include-source-changes`. |
+| **INFO** | Allowlisted dist artifacts (autotools-generated `configure`, `aclocal.m4`, gettext m4, libtool m4), `Cargo.toml` rewritten by `cargo publish`, npm `package.json` rewritten on publish, PyPI `PKG-INFO`, etc. | Same. Plus modified allowlisted build files (gettext bumps etc.) — content scan still runs and **independently** flags HIGH on obfuscation patterns. |
+
+The split between **modification of allowlisted m4 files** (Info, autoreconf regen is normal between releases) and **content-scan obfuscation** (HIGH, fires on the actual XZ payload) means the smoking gun for backdoored allowlisted files is preserved while clean release pairs stay quiet.
 
 #### Ecosystem-aware allowlists
 
