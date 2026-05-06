@@ -26,12 +26,20 @@ const PATH_PATTERNS: &[(&str, &str, &str)] = &[
     (".cursor/rules", "ai-instructions-file", "cursor-rules-dir"),
     (".windsurfrules", "ai-instructions-file", "windsurf-rules"),
     (".aider.conf.yml", "ai-instructions-file", "aider-config"),
-    (".github/copilot-instructions.md", "ai-instructions-file", "copilot-instructions"),
+    (
+        ".github/copilot-instructions.md",
+        "ai-instructions-file",
+        "copilot-instructions",
+    ),
     (".mcp.json", "mcp-config", "mcp-project"),
     ("mcp.json", "mcp-config", "mcp-generic"),
     ("claude_desktop_config.json", "mcp-config", "claude-desktop"),
     (".claude/settings.json", "agent-settings", "claude-settings"),
-    (".claude/settings.local.json", "agent-settings", "claude-settings-local"),
+    (
+        ".claude/settings.local.json",
+        "agent-settings",
+        "claude-settings-local",
+    ),
 ];
 
 /// Returns true when `rel` is inside any of the `ignore` prefix subtrees.
@@ -69,7 +77,9 @@ fn flag_mcp_servers(path: &Path, content: &str) -> Vec<Finding> {
         Err(_) => return findings,
     };
 
-    let servers = json_value.get("mcpServers").or_else(|| json_value.get("servers"));
+    let servers = json_value
+        .get("mcpServers")
+        .or_else(|| json_value.get("servers"));
     let Some(serde_json::Value::Object(map)) = servers else {
         return findings;
     };
@@ -79,7 +89,12 @@ fn flag_mcp_servers(path: &Path, content: &str) -> Vec<Finding> {
         let args: Vec<String> = cfg
             .get("args")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_str()).map(String::from).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
         let env_keys: Vec<String> = cfg
             .get("env")
@@ -95,19 +110,30 @@ fn flag_mcp_servers(path: &Path, content: &str) -> Vec<Finding> {
         let mut concerns: Vec<&'static str> = vec![];
         let lc = command.to_ascii_lowercase();
         let basename_lc = lc.rsplit('/').next().unwrap_or(&lc).to_string();
-        if matches!(basename_lc.as_str(), "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "fish") {
+        if matches!(
+            basename_lc.as_str(),
+            "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "fish"
+        ) {
             concerns.push("shell-as-entrypoint");
         }
         if matches!(basename_lc.as_str(), "curl" | "wget") {
             concerns.push("network-fetch-on-launch");
         }
-        if args.iter().any(|a| a.starts_with("http://") || a.starts_with("https://")) {
+        if args
+            .iter()
+            .any(|a| a.starts_with("http://") || a.starts_with("https://"))
+        {
             concerns.push("network-url-as-arg");
         }
-        if args.iter().any(|a| a.contains("--allow-all") || a.contains("--no-sandbox") || a.contains("--insecure")) {
+        if args.iter().any(|a| {
+            a.contains("--allow-all") || a.contains("--no-sandbox") || a.contains("--insecure")
+        }) {
             concerns.push("sandbox-or-tls-disabled");
         }
-        if args.iter().any(|a| a.contains("| bash") || a.contains("|sh") || a.contains("| sh")) {
+        if args
+            .iter()
+            .any(|a| a.contains("| bash") || a.contains("|sh") || a.contains("| sh"))
+        {
             concerns.push("piped-curl-bash");
         }
         if let Some(u) = &url {
@@ -162,21 +188,23 @@ fn flag_mcp_servers(path: &Path, content: &str) -> Vec<Finding> {
 /// **not** match `examplesextra`).
 pub fn scan(root: &Path, ignore: &[PathBuf]) -> std::io::Result<Vec<Finding>> {
     let mut findings = Vec::new();
-    let rules = content_rules().map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-    })?;
+    let rules = content_rules()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    let walker = WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        if matches!(
-            name.as_ref(),
-            ".git" | "target" | "node_modules" | "dist" | "build" | ".next"
-        ) {
-            return false;
-        }
-        let rel = e.path().strip_prefix(root).unwrap_or(e.path());
-        !is_ignored(rel, ignore)
-    });
+    let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                ".git" | "target" | "node_modules" | "dist" | "build" | ".next"
+            ) {
+                return false;
+            }
+            let rel = e.path().strip_prefix(root).unwrap_or(e.path());
+            !is_ignored(rel, ignore)
+        });
 
     for entry in walker.flatten() {
         if !entry.file_type().is_file() {
@@ -185,7 +213,9 @@ pub fn scan(root: &Path, ignore: &[PathBuf]) -> std::io::Result<Vec<Finding>> {
         let path = entry.path();
         let rel: PathBuf = path.strip_prefix(root).unwrap_or(path).to_path_buf();
         let rel_str = rel.to_string_lossy().replace('\\', "/");
-        let Some((path_rule, kind)) = match_path(&rel_str) else { continue; };
+        let Some((path_rule, kind)) = match_path(&rel_str) else {
+            continue;
+        };
 
         let path_display = path.display().to_string();
 
@@ -255,8 +285,14 @@ mod tests {
         assert!(relpath_endswith("CLAUDE.md", "CLAUDE.md"));
         assert!(relpath_endswith("docs/CLAUDE.md", "CLAUDE.md"));
         assert!(!relpath_endswith("FAKECLAUDE.md", "CLAUDE.md"));
-        assert!(relpath_endswith(".claude/settings.json", ".claude/settings.json"));
-        assert!(relpath_endswith("nested/.claude/settings.json", ".claude/settings.json"));
+        assert!(relpath_endswith(
+            ".claude/settings.json",
+            ".claude/settings.json"
+        ));
+        assert!(relpath_endswith(
+            "nested/.claude/settings.json",
+            ".claude/settings.json"
+        ));
     }
 
     #[test]

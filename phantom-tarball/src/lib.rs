@@ -49,11 +49,17 @@ pub fn index(tar_gz: &Path) -> Result<Index> {
     for entry in archive.entries().context("reading tar entries")? {
         let mut entry = entry.context("reading tar entry header")?;
         let header = entry.header();
-        if !matches!(header.entry_type(), tar::EntryType::Regular | tar::EntryType::Continuous) {
+        if !matches!(
+            header.entry_type(),
+            tar::EntryType::Regular | tar::EntryType::Continuous
+        ) {
             continue;
         }
         let raw_path = entry.path().context("decoding tar entry path")?;
-        let key = raw_path.to_string_lossy().trim_start_matches("./").to_string();
+        let key = raw_path
+            .to_string_lossy()
+            .trim_start_matches("./")
+            .to_string();
 
         // Decide whether to keep file content for later red-flag scanning.
         let keep_content = wants_content_scan(&key);
@@ -61,10 +67,16 @@ pub fn index(tar_gz: &Path) -> Result<Index> {
         let mut hasher = Sha256::new();
         let mut buf = [0u8; 8192];
         let mut total = 0u64;
-        let mut head: Option<Vec<u8>> = if keep_content { Some(Vec::with_capacity(8192)) } else { None };
+        let mut head: Option<Vec<u8>> = if keep_content {
+            Some(Vec::with_capacity(8192))
+        } else {
+            None
+        };
         loop {
             let n = entry.read(&mut buf)?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             hasher.update(&buf[..n]);
             if let Some(h) = &mut head {
                 let remaining = CONTENT_SCAN_BYTES.saturating_sub(h.len());
@@ -77,7 +89,14 @@ pub fn index(tar_gz: &Path) -> Result<Index> {
         }
         let digest: [u8; 32] = hasher.finalize().into();
 
-        raw.insert(key, Entry { size: total, sha256: digest, head });
+        raw.insert(
+            key,
+            Entry {
+                size: total,
+                sha256: digest,
+                head,
+            },
+        );
     }
     Ok(strip_common_top_dir(raw))
 }
@@ -134,7 +153,9 @@ fn strip_common_top_dir(index: Index) -> Index {
             Some(_) => return index,
         }
     }
-    let Some(top) = common else { return index; };
+    let Some(top) = common else {
+        return index;
+    };
     let prefix_len = top.len() + 1; // include trailing '/'
     index
         .into_iter()
@@ -410,7 +431,9 @@ fn has_long_base64_run(s: &str, min_len: usize) -> bool {
         let is_b64 = b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=';
         if is_b64 {
             run += 1;
-            if run >= min_len { return true; }
+            if run >= min_len {
+                return true;
+            }
         } else {
             run = 0;
         }
@@ -424,7 +447,9 @@ fn has_long_hex_run(s: &str, min_len: usize) -> bool {
         let is_hex = matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F');
         if is_hex {
             run += 1;
-            if run >= min_len { return true; }
+            if run >= min_len {
+                return true;
+            }
         } else {
             run = 0;
         }
@@ -446,13 +471,27 @@ fn basename(path: &str) -> &str {
 
 fn is_build_system_path(path: &str) -> bool {
     let bn = basename(path);
-    if bn == "configure.ac" || bn == "configure.in" { return true; }
-    if bn.ends_with(".m4") || bn.ends_with(".am") { return true; }
-    if path.starts_with("m4/") || path.contains("/m4/") { return true; }
-    if bn == "build.rs" { return true; }
-    if bn == "CMakeLists.txt" || bn.ends_with(".cmake") { return true; }
-    if bn == "Makefile" || bn.ends_with("/Makefile") { return true; }
-    if path.starts_with(".github/workflows/") { return true; }
+    if bn == "configure.ac" || bn == "configure.in" {
+        return true;
+    }
+    if bn.ends_with(".m4") || bn.ends_with(".am") {
+        return true;
+    }
+    if path.starts_with("m4/") || path.contains("/m4/") {
+        return true;
+    }
+    if bn == "build.rs" {
+        return true;
+    }
+    if bn == "CMakeLists.txt" || bn.ends_with(".cmake") {
+        return true;
+    }
+    if bn == "Makefile" || bn.ends_with("/Makefile") {
+        return true;
+    }
+    if path.starts_with(".github/workflows/") {
+        return true;
+    }
     false
 }
 
@@ -548,7 +587,19 @@ fn is_known_dist_artifact(path: &str) -> bool {
         if bn.ends_with(".gmo") || bn.ends_with(".mo") {
             return true;
         }
-        if matches!(bn, "stamp-po" | "Makefile.in.in" | "remove-potcdate.sin" | "Rules-quot" | "boldquot.sed" | "en@boldquot.header" | "en@quot.header" | "insert-header.sin" | "quot.sed" | "Makevars.template") {
+        if matches!(
+            bn,
+            "stamp-po"
+                | "Makefile.in.in"
+                | "remove-potcdate.sin"
+                | "Rules-quot"
+                | "boldquot.sed"
+                | "en@boldquot.header"
+                | "en@quot.header"
+                | "insert-header.sin"
+                | "quot.sed"
+                | "Makevars.template"
+        ) {
             return true;
         }
         if bn == "POTFILES" || bn.ends_with(".pot") {
@@ -619,7 +670,10 @@ fn is_known_dist_artifact(path: &str) -> bool {
 
 fn is_release_doc(path: &str) -> bool {
     let bn = basename(path).to_ascii_uppercase();
-    matches!(bn.as_str(), "AUTHORS" | "CHANGELOG" | "CHANGES" | "NEWS" | "THANKS" | "MANIFEST")
+    matches!(
+        bn.as_str(),
+        "AUTHORS" | "CHANGELOG" | "CHANGES" | "NEWS" | "THANKS" | "MANIFEST"
+    )
 }
 
 /// Classify a file that exists on the target side but not on the source side.
@@ -726,7 +780,6 @@ fn classify_modified(
     }
 }
 
-
 fn describe_added(path: &str, eco: Option<Ecosystem>, mode: DiffMode) -> String {
     let (here, there) = mode_labels(mode);
     if is_ecosystem_release_only_artifact(path, eco) {
@@ -755,9 +808,15 @@ fn describe_added(path: &str, eco: Option<Ecosystem>, mode: DiffMode) -> String 
             path, there, here, there, there
         )
     } else if is_release_doc(path) {
-        format!("`{}` is a release-time document (AUTHORS/CHANGELOG/etc.). Usually benign.", path)
+        format!(
+            "`{}` is a release-time document (AUTHORS/CHANGELOG/etc.). Usually benign.",
+            path
+        )
     } else if path.starts_with("doc/") || path.contains("/_static/") {
-        format!("`{}` looks like generated documentation. Usually benign; not source-tracked.", path)
+        format!(
+            "`{}` looks like generated documentation. Usually benign; not source-tracked.",
+            path
+        )
     } else {
         match mode {
             DiffMode::GitVsRelease => format!(
@@ -862,7 +921,10 @@ mod tests {
         // GvR mode is P0 — git tag must match the source byte-for-byte.
         assert_eq!(cm("m4/custom-glue.m4", None), Some(Severity::P0));
         assert_eq!(cm("configure.ac", None), Some(Severity::P0));
-        assert_eq!(cm(".github/workflows/release.yml", None), Some(Severity::P0));
+        assert_eq!(
+            cm(".github/workflows/release.yml", None),
+            Some(Severity::P0)
+        );
         // Standard dist artifacts in release-only are Info.
         assert_eq!(ca("configure", None), Some(Severity::Info));
         assert_eq!(ca("aclocal.m4", None), Some(Severity::Info));
@@ -873,24 +935,42 @@ mod tests {
 
     #[test]
     fn ecosystem_allowlist_crates() {
-        assert_eq!(ca(".cargo_vcs_info.json", Some(Ecosystem::Crates)), Some(Severity::Info));
-        assert_eq!(ca("Cargo.toml.orig", Some(Ecosystem::Crates)), Some(Severity::Info));
-        assert_eq!(ca("Cargo.lock", Some(Ecosystem::Crates)), Some(Severity::Info));
-        assert_eq!(cm("Cargo.toml", Some(Ecosystem::Crates)), Some(Severity::Info));
+        assert_eq!(
+            ca(".cargo_vcs_info.json", Some(Ecosystem::Crates)),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            ca("Cargo.toml.orig", Some(Ecosystem::Crates)),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            ca("Cargo.lock", Some(Ecosystem::Crates)),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            cm("Cargo.toml", Some(Ecosystem::Crates)),
+            Some(Severity::Info)
+        );
         // Without an ecosystem hint in GvR, modified Cargo.toml is HIGH (no info).
         assert_eq!(cm("Cargo.toml", None), Some(Severity::High));
     }
 
     #[test]
     fn ecosystem_allowlist_npm() {
-        assert_eq!(cm("package.json", Some(Ecosystem::Npm)), Some(Severity::Info));
+        assert_eq!(
+            cm("package.json", Some(Ecosystem::Npm)),
+            Some(Severity::Info)
+        );
         assert_eq!(cm("package.json", None), Some(Severity::High));
     }
 
     #[test]
     fn ecosystem_allowlist_pypi() {
         assert_eq!(ca("PKG-INFO", Some(Ecosystem::PyPI)), Some(Severity::Info));
-        assert_eq!(ca("foo.egg-info/PKG-INFO", Some(Ecosystem::PyPI)), Some(Severity::Info));
+        assert_eq!(
+            ca("foo.egg-info/PKG-INFO", Some(Ecosystem::PyPI)),
+            Some(Severity::Info)
+        );
         assert_eq!(ca("PKG-INFO", None), Some(Severity::Medium)); // unknown otherwise
     }
 
@@ -990,11 +1070,21 @@ mod tests {
     fn rvr_keeps_ecosystem_allowlists() {
         // Ecosystem rewrites stay Info regardless of mode.
         assert_eq!(
-            classify_modified("Cargo.toml", Some(Ecosystem::Crates), DiffMode::ReleaseVsRelease, false),
+            classify_modified(
+                "Cargo.toml",
+                Some(Ecosystem::Crates),
+                DiffMode::ReleaseVsRelease,
+                false
+            ),
             Some(Severity::Info)
         );
         assert_eq!(
-            classify_modified("package.json", Some(Ecosystem::Npm), DiffMode::ReleaseVsRelease, false),
+            classify_modified(
+                "package.json",
+                Some(Ecosystem::Npm),
+                DiffMode::ReleaseVsRelease,
+                false
+            ),
             Some(Severity::Info)
         );
     }
@@ -1014,7 +1104,9 @@ mod tests {
     fn long_b64_run() {
         let mut s = String::new();
         s.push_str("garbage = ");
-        for _ in 0..210 { s.push('A'); }
+        for _ in 0..210 {
+            s.push('A');
+        }
         assert!(has_long_base64_run(&s, 200));
         assert!(!has_long_base64_run("AAAA", 200));
     }
@@ -1022,7 +1114,11 @@ mod tests {
     fn entry(sha: u8) -> Entry {
         let mut s = [0u8; 32];
         s[0] = sha;
-        Entry { size: 1, sha256: s, head: None }
+        Entry {
+            size: 1,
+            sha256: s,
+            head: None,
+        }
     }
 
     #[test]

@@ -106,9 +106,8 @@ pub fn snapshot(repo: &Path, opts: Options) -> Result<SnapshotReport> {
             "INSERT INTO commits(sha, author_name, author_email, committer_email, iso_time, n_files, n_build_files)
              VALUES (?, ?, ?, ?, ?, ?, ?)"
         )?;
-        let mut insert_file = tx.prepare(
-            "INSERT INTO commit_files(sha, path, is_build) VALUES (?, ?, ?)"
-        )?;
+        let mut insert_file =
+            tx.prepare("INSERT INTO commit_files(sha, path, is_build) VALUES (?, ?, ?)")?;
         for c in &commits {
             let n_files = c.files.len() as i64;
             let n_build = c.files.iter().filter(|p| is_build_system_path(p)).count() as i64;
@@ -262,7 +261,10 @@ fn parse_git_log(s: &str) -> Result<Vec<CommitRecord>> {
                 commits.push(c);
             }
             let mut parts = rest.splitn(5, '|');
-            let sha = parts.next().ok_or_else(|| anyhow!("missing sha in {}", line))?.to_string();
+            let sha = parts
+                .next()
+                .ok_or_else(|| anyhow!("missing sha in {}", line))?
+                .to_string();
             let author_name = parts.next().unwrap_or("").to_string();
             let author_email = parts.next().unwrap_or("").to_string();
             let committer_email = parts.next().unwrap_or("").to_string();
@@ -334,13 +336,27 @@ fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
 /// third detector needs it.
 pub fn is_build_system_path(path: &str) -> bool {
     let bn = path.rsplit('/').next().unwrap_or(path);
-    if bn == "configure.ac" || bn == "configure.in" { return true; }
-    if bn.ends_with(".m4") || bn.ends_with(".am") { return true; }
-    if path.starts_with("m4/") || path.contains("/m4/") { return true; }
-    if bn == "build.rs" { return true; }
-    if bn == "CMakeLists.txt" || bn.ends_with(".cmake") { return true; }
-    if bn == "Makefile" || bn.ends_with("/Makefile") { return true; }
-    if path.starts_with(".github/workflows/") { return true; }
+    if bn == "configure.ac" || bn == "configure.in" {
+        return true;
+    }
+    if bn.ends_with(".m4") || bn.ends_with(".am") {
+        return true;
+    }
+    if path.starts_with("m4/") || path.contains("/m4/") {
+        return true;
+    }
+    if bn == "build.rs" {
+        return true;
+    }
+    if bn == "CMakeLists.txt" || bn.ends_with(".cmake") {
+        return true;
+    }
+    if bn == "Makefile" || bn.ends_with("/Makefile") {
+        return true;
+    }
+    if path.starts_with(".github/workflows/") {
+        return true;
+    }
     false
 }
 

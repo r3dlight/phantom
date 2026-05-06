@@ -212,9 +212,18 @@ fn same_ecosystem_and_package(
 ) -> bool {
     use phantom_fetch::PackageSpec::*;
     match (a, b) {
-        (GitHub { owner: o1, repo: r1, .. }, GitHub { owner: o2, repo: r2, .. }) => {
-            o1 == o2 && r1 == r2
-        }
+        (
+            GitHub {
+                owner: o1,
+                repo: r1,
+                ..
+            },
+            GitHub {
+                owner: o2,
+                repo: r2,
+                ..
+            },
+        ) => o1 == o2 && r1 == r2,
         (Npm { package: p1, .. }, Npm { package: p2, .. }) => p1 == p2,
         (PyPI { package: p1, .. }, PyPI { package: p2, .. }) => p1 == p2,
         (Crates { package: p1, .. }, Crates { package: p2, .. }) => p1 == p2,
@@ -243,17 +252,26 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let findings = phantom_promptinjection::scan(path, ignore)?;
             (Some(path.display().to_string()), findings)
         }
-        Commands::Snapshot { repo, db, min_commits, medium_attraction, high_attraction } => {
+        Commands::Snapshot {
+            repo,
+            db,
+            min_commits,
+            medium_attraction,
+            high_attraction,
+        } => {
             let opts = phantom_snapshot::Options {
                 db_path: db.clone(),
                 min_commits_for_finding: *min_commits,
                 medium_attraction_pct: *medium_attraction,
                 high_attraction_pct: *high_attraction,
             };
-            let report = phantom_snapshot::snapshot(repo, phantom_snapshot::Options {
-                db_path: opts.db_path.clone(),
-                ..phantom_snapshot::Options::default()
-            })?;
+            let report = phantom_snapshot::snapshot(
+                repo,
+                phantom_snapshot::Options {
+                    db_path: opts.db_path.clone(),
+                    ..phantom_snapshot::Options::default()
+                },
+            )?;
             // Re-run with the user's thresholds for findings:
             let opts_for_findings = phantom_snapshot::Options {
                 db_path: None,
@@ -264,12 +282,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let findings = phantom_snapshot::findings_from_report(&report, &opts_for_findings);
             (Some(repo.display().to_string()), findings)
         }
-        Commands::McpAudit { config, live, server, timeout_secs } => {
+        Commands::McpAudit {
+            config,
+            live,
+            server,
+            timeout_secs,
+        } => {
             let mut findings = phantom_mcp::audit_config(config)?;
             if *live {
-                let server_name = server.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("--live requires --server <NAME>")
-                })?;
+                let server_name = server
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("--live requires --server <NAME>"))?;
                 eprintln!(
                     "phantom: warning: --live spawns `{}` from `{}`; \
                      this executes the configured MCP server, which by definition is \
@@ -278,10 +301,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     config.display()
                 );
                 let spec = phantom_mcp::McpServerSpec::from_config(config, server_name)?;
-                let live_findings = phantom_mcp::audit_live(
-                    &spec,
-                    std::time::Duration::from_secs(*timeout_secs),
-                )?;
+                let live_findings =
+                    phantom_mcp::audit_live(&spec, std::time::Duration::from_secs(*timeout_secs))?;
                 findings.extend(live_findings);
             }
             let label = format!(
@@ -329,11 +350,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 // (5) release-vs-release, fully local.
                 (None, Some(b), Some(r), None, None) => {
                     opts.mode = phantom_tarball::DiffMode::ReleaseVsRelease;
-                    let label = format!(
-                        "baseline={} ↔ release={}",
-                        b.display(),
-                        r.display()
-                    );
+                    let label = format!("baseline={} ↔ release={}", b.display(), r.display());
                     (b.clone(), r.clone(), label)
                 }
                 // (4) release-vs-release, both auto-fetched.
@@ -351,24 +368,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
                     let baseline_dl = phantom_fetch::download(&baseline_pkg)?;
                     let baseline_archive = phantom_fetch::pick_canonical_asset(&baseline_dl)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "baseline `{}` has no archive asset to compare",
-                            baseline_dl.spec_label
-                        ))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "baseline `{}` has no archive asset to compare",
+                                baseline_dl.spec_label
+                            )
+                        })?
                         .to_path_buf();
 
                     let target_dl = phantom_fetch::download(&target_pkg)?;
                     let target_archive = phantom_fetch::pick_canonical_asset(&target_dl)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "target release `{}` has no archive asset to compare",
-                            target_dl.spec_label
-                        ))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "target release `{}` has no archive asset to compare",
+                                target_dl.spec_label
+                            )
+                        })?
                         .to_path_buf();
 
-                    let label = format!(
-                        "{}  ↔  {}",
-                        baseline_dl.spec_label, target_dl.spec_label
-                    );
+                    let label = format!("{}  ↔  {}", baseline_dl.spec_label, target_dl.spec_label);
                     (baseline_archive, target_archive, label)
                 }
                 // (2)/(3) git-vs-release, auto-fetched target with optional
@@ -380,10 +398,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
                     let downloaded = phantom_fetch::download(&spec)?;
                     let target_archive = phantom_fetch::pick_canonical_asset(&downloaded)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "release `{}` has no archive asset to diff against",
-                            downloaded.spec_label
-                        ))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "release `{}` has no archive asset to diff against",
+                                downloaded.spec_label
+                            )
+                        })?
                         .to_path_buf();
                     let source_archive = match override_git {
                         Some(g) => g.clone(),
@@ -402,7 +422,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     let label = format!(
                         "{} (source ↔ {})",
                         downloaded.spec_label,
-                        target_archive.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                        target_archive
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("?")
                     );
                     (source_archive, target_archive, label)
                 }

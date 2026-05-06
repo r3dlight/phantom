@@ -104,36 +104,65 @@ fn rot13_char(c: char) -> char {
 /// enhancement.
 const CONFUSABLES: &[(char, &str)] = &[
     // Cyrillic → Latin
-    ('а', "a"), ('А', "A"),
-    ('в', "v"), ('В', "B"),
-    ('е', "e"), ('Е', "E"),
-    ('к', "k"), ('К', "K"),
-    ('м', "m"), ('М', "M"),
-    ('н', "n"), ('Н', "H"),
-    ('о', "o"), ('О', "O"),
-    ('р', "p"), ('Р', "P"),
-    ('с', "c"), ('С', "C"),
-    ('т', "t"), ('Т', "T"),
-    ('у', "y"), ('У', "Y"),
-    ('х', "x"), ('Х', "X"),
-    ('і', "i"), ('І', "I"),
-    ('ј', "j"), ('Ј', "J"),
-    ('ѕ', "s"), ('Ѕ', "S"),
+    ('а', "a"),
+    ('А', "A"),
+    ('в', "v"),
+    ('В', "B"),
+    ('е', "e"),
+    ('Е', "E"),
+    ('к', "k"),
+    ('К', "K"),
+    ('м', "m"),
+    ('М', "M"),
+    ('н', "n"),
+    ('Н', "H"),
+    ('о', "o"),
+    ('О', "O"),
+    ('р', "p"),
+    ('Р', "P"),
+    ('с', "c"),
+    ('С', "C"),
+    ('т', "t"),
+    ('Т', "T"),
+    ('у', "y"),
+    ('У', "Y"),
+    ('х', "x"),
+    ('Х', "X"),
+    ('і', "i"),
+    ('І', "I"),
+    ('ј', "j"),
+    ('Ј', "J"),
+    ('ѕ', "s"),
+    ('Ѕ', "S"),
     // Greek → Latin
-    ('α', "a"), ('Α', "A"),
-    ('β', "b"), ('Β', "B"),
-    ('ε', "e"), ('Ε', "E"),
-    ('ζ', "z"), ('Ζ', "Z"),
-    ('η', "n"), ('Η', "H"),
-    ('ι', "i"), ('Ι', "I"),
-    ('κ', "k"), ('Κ', "K"),
-    ('μ', "u"), ('Μ', "M"),
-    ('ν', "v"), ('Ν', "N"),
-    ('ο', "o"), ('Ο', "O"),
-    ('ρ', "p"), ('Ρ', "P"),
-    ('τ', "t"), ('Τ', "T"),
-    ('υ', "u"), ('Υ', "Y"),
-    ('χ', "x"), ('Χ', "X"),
+    ('α', "a"),
+    ('Α', "A"),
+    ('β', "b"),
+    ('Β', "B"),
+    ('ε', "e"),
+    ('Ε', "E"),
+    ('ζ', "z"),
+    ('Ζ', "Z"),
+    ('η', "n"),
+    ('Η', "H"),
+    ('ι', "i"),
+    ('Ι', "I"),
+    ('κ', "k"),
+    ('Κ', "K"),
+    ('μ', "u"),
+    ('Μ', "M"),
+    ('ν', "v"),
+    ('Ν', "N"),
+    ('ο', "o"),
+    ('Ο', "O"),
+    ('ρ', "p"),
+    ('Ρ', "P"),
+    ('τ', "t"),
+    ('Τ', "T"),
+    ('υ', "u"),
+    ('Υ', "Y"),
+    ('χ', "x"),
+    ('Χ', "X"),
 ];
 
 pub(crate) fn normalize_confusables(s: &str) -> String {
@@ -156,9 +185,8 @@ pub(crate) fn strip_markdown_per_line(s: &str) -> String {
     let lines: Vec<&str> = s.split('\n').collect();
     let last = lines.len().saturating_sub(1);
     for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start_matches(|c: char| {
-            matches!(c, '#' | '>' | ' ' | '\t' | '*' | '-' | '+')
-        });
+        let trimmed = line
+            .trim_start_matches(|c: char| matches!(c, '#' | '>' | ' ' | '\t' | '*' | '-' | '+'));
         out.push_str(&strip_inline(trimmed));
         if i < last {
             out.push('\n');
@@ -352,11 +380,7 @@ fn is_mostly_printable(s: &str) -> bool {
 
 fn line_at_byte_offset(s: &str, off: usize) -> u32 {
     let off = off.min(s.len());
-    s.as_bytes()[..off]
-        .iter()
-        .filter(|&&b| b == b'\n')
-        .count() as u32
-        + 1
+    s.as_bytes()[..off].iter().filter(|&&b| b == b'\n').count() as u32 + 1
 }
 
 #[cfg(test)]
@@ -365,9 +389,15 @@ mod tests {
 
     #[test]
     fn rot13_roundtrip_and_known() {
-        assert_eq!(rot13_text(&rot13_text("Hello, World! 1234")), "Hello, World! 1234");
+        assert_eq!(
+            rot13_text(&rot13_text("Hello, World! 1234")),
+            "Hello, World! 1234"
+        );
         assert_eq!(rot13_text("ignore"), "vtaber");
-        assert_eq!(rot13_text("Vtaber cerivbhf vafgehpgvbaf"), "Ignore previous instructions");
+        assert_eq!(
+            rot13_text("Vtaber cerivbhf vafgehpgvbaf"),
+            "Ignore previous instructions"
+        );
     }
 
     #[test]

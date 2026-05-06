@@ -58,7 +58,9 @@ impl FromStr for PackageSpec {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
         let (scheme, rest) = match s.split_once(':') {
-            Some((sch, r)) if matches!(sch, "github" | "gh" | "npm" | "pypi" | "crates") => (sch, r),
+            Some((sch, r)) if matches!(sch, "github" | "gh" | "npm" | "pypi" | "crates") => {
+                (sch, r)
+            }
             _ => ("github", s),
         };
 
@@ -180,9 +182,7 @@ fn api_get(agent: &ureq::Agent, url: &str, github_auth: bool) -> Result<ureq::Re
             req = req.set("Authorization", &auth);
         }
     }
-    let resp = req
-        .call()
-        .with_context(|| format!("GET {}", url))?;
+    let resp = req.call().with_context(|| format!("GET {}", url))?;
     Ok(resp)
 }
 
@@ -269,10 +269,7 @@ fn try_fetch_github_source(
     extra_tag_patterns: &[String],
     cache_dir: &Path,
 ) -> Option<PathBuf> {
-    let mut patterns: Vec<String> = vec![
-        format!("v{}", version),
-        version.to_string(),
-    ];
+    let mut patterns: Vec<String> = vec![format!("v{}", version), version.to_string()];
     patterns.extend(extra_tag_patterns.iter().cloned());
 
     for tag in &patterns {
@@ -295,9 +292,7 @@ fn try_fetch_github_source(
 
 pub fn download(spec: &PackageSpec) -> Result<DownloadedRelease> {
     match spec {
-        PackageSpec::GitHub { owner, repo, tag } => {
-            download_github(owner, repo, tag.as_deref())
-        }
+        PackageSpec::GitHub { owner, repo, tag } => download_github(owner, repo, tag.as_deref()),
         PackageSpec::Npm { package, version } => download_npm(package, version.as_deref()),
         PackageSpec::PyPI { package, version } => download_pypi(package, version.as_deref()),
         PackageSpec::Crates { package, version } => download_crates(package, version.as_deref()),
@@ -314,7 +309,12 @@ pub fn pick_canonical_asset(rel: &DownloadedRelease) -> Option<&Path> {
     }
     rel.release_assets
         .iter()
-        .min_by_key(|p| p.file_name().and_then(|n| n.to_str()).map(str::len).unwrap_or(usize::MAX))
+        .min_by_key(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(str::len)
+                .unwrap_or(usize::MAX)
+        })
         .map(|p| p.as_path())
         .or_else(|| rel.release_assets.first().map(|p| p.as_path()))
 }
@@ -362,7 +362,10 @@ fn download_github(owner: &str, repo: &str, tag: Option<&str>) -> Result<Downloa
         "https://github.com/{}/{}/archive/refs/tags/{}.tar.gz",
         owner, repo, resolved_version
     );
-    let source_archive = cache.join(format!("source-{}.tar.gz", sanitize_name(&resolved_version)));
+    let source_archive = cache.join(format!(
+        "source-{}.tar.gz",
+        sanitize_name(&resolved_version)
+    ));
     if !source_archive.exists() {
         download_to(&agent, &source_url, &source_archive, true)
             .with_context(|| format!("downloading source archive for {}", resolved_version))?;
@@ -447,18 +450,19 @@ fn download_npm(package: &str, version: Option<&str>) -> Result<DownloadedReleas
             .with_context(|| format!("downloading npm tarball for {}@{}", package, resolved))?;
     }
 
-    let source_archive = repo_url
-        .as_deref()
-        .and_then(parse_github_url)
-        .and_then(|(owner, repo)| {
-            // npm-specific tag patterns: many projects tag `v<version>`,
-            // some lerna monorepos tag `<package>@<version>`.
-            let extra = vec![
-                format!("{}@{}", package, resolved),
-                format!("{}-v{}", package, resolved),
-            ];
-            try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
-        });
+    let source_archive =
+        repo_url
+            .as_deref()
+            .and_then(parse_github_url)
+            .and_then(|(owner, repo)| {
+                // npm-specific tag patterns: many projects tag `v<version>`,
+                // some lerna monorepos tag `<package>@<version>`.
+                let extra = vec![
+                    format!("{}@{}", package, resolved),
+                    format!("{}-v{}", package, resolved),
+                ];
+                try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
+            });
 
     Ok(DownloadedRelease {
         spec_label: format!("npm:{}@{}", package, resolved),
@@ -501,7 +505,13 @@ fn download_pypi(package: &str, version: Option<&str>) -> Result<DownloadedRelea
     let sdist = urls
         .iter()
         .find(|u| u["packagetype"].as_str() == Some("sdist"))
-        .ok_or_else(|| anyhow!("no sdist artifact for PyPI {}@{}; only wheels published", package, resolved))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "no sdist artifact for PyPI {}@{}; only wheels published",
+                package,
+                resolved
+            )
+        })?;
     let sdist_url = sdist["url"]
         .as_str()
         .ok_or_else(|| anyhow!("malformed sdist url"))?
@@ -526,7 +536,14 @@ fn download_pypi(package: &str, version: Option<&str>) -> Result<DownloadedRelea
     // Source repo is typically in info.project_urls or info.home_page.
     let repo_url = (|| -> Option<String> {
         if let Some(map) = info["info"]["project_urls"].as_object() {
-            for key in &["Source", "Source Code", "Repository", "Homepage", "GitHub", "Code"] {
+            for key in &[
+                "Source",
+                "Source Code",
+                "Repository",
+                "Homepage",
+                "GitHub",
+                "Code",
+            ] {
                 if let Some(v) = map.get(*key).and_then(|v| v.as_str()) {
                     return Some(v.into());
                 }
@@ -542,16 +559,17 @@ fn download_pypi(package: &str, version: Option<&str>) -> Result<DownloadedRelea
         info["info"]["home_page"].as_str().map(String::from)
     })();
 
-    let source_archive = repo_url
-        .as_deref()
-        .and_then(parse_github_url)
-        .and_then(|(owner, repo)| {
-            let extra = vec![
-                format!("{}-{}", package, resolved),
-                format!("release-{}", resolved),
-            ];
-            try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
-        });
+    let source_archive =
+        repo_url
+            .as_deref()
+            .and_then(parse_github_url)
+            .and_then(|(owner, repo)| {
+                let extra = vec![
+                    format!("{}-{}", package, resolved),
+                    format!("release-{}", resolved),
+                ];
+                try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
+            });
 
     Ok(DownloadedRelease {
         spec_label: format!("pypi:{}@{}", package, resolved),
@@ -593,29 +611,32 @@ fn download_crates(package: &str, version: Option<&str>) -> Result<DownloadedRel
     fs::create_dir_all(&cache)?;
 
     // Crate files are gzipped tar archives with a `.crate` extension.
-    let release_filename = format!("{}-{}.crate", sanitize_name(package), sanitize_name(&resolved));
+    let release_filename = format!(
+        "{}-{}.crate",
+        sanitize_name(package),
+        sanitize_name(&resolved)
+    );
     let release_path = cache.join(&release_filename);
     if !release_path.exists() {
         download_to(&agent, &download_url, &release_path, false)
             .with_context(|| format!("downloading crate {}@{}", package, resolved))?;
     }
 
-    let repo_url = info["crate"]["repository"]
-        .as_str()
-        .map(String::from);
+    let repo_url = info["crate"]["repository"].as_str().map(String::from);
 
-    let source_archive = repo_url
-        .as_deref()
-        .and_then(parse_github_url)
-        .and_then(|(owner, repo)| {
-            // crates.io workspaces sometimes tag `<crate>-v<ver>` or
-            // `<crate>-<ver>` to disambiguate among workspace members.
-            let extra = vec![
-                format!("{}-v{}", package, resolved),
-                format!("{}-{}", package, resolved),
-            ];
-            try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
-        });
+    let source_archive =
+        repo_url
+            .as_deref()
+            .and_then(parse_github_url)
+            .and_then(|(owner, repo)| {
+                // crates.io workspaces sometimes tag `<crate>-v<ver>` or
+                // `<crate>-<ver>` to disambiguate among workspace members.
+                let extra = vec![
+                    format!("{}-v{}", package, resolved),
+                    format!("{}-{}", package, resolved),
+                ];
+                try_fetch_github_source(&agent, &owner, &repo, &resolved, &extra, &cache)
+            });
 
     Ok(DownloadedRelease {
         spec_label: format!("crates:{}@{}", package, resolved),

@@ -511,13 +511,7 @@ fn render_finding(out: &mut String, f: &Finding, width: usize, color: bool) {
             let truncated: String = ex.chars().take(max).collect();
             let render_excerpt: String = truncated
                 .chars()
-                .map(|c| {
-                    if c.is_control() && c != '\t' {
-                        '·'
-                    } else {
-                        c
-                    }
-                })
+                .map(|c| if c.is_control() && c != '\t' { '·' } else { c })
                 .collect();
             out.push_str(&format!(
                 "            {}\n",
@@ -624,7 +618,10 @@ mod tests {
         let r = Report::new(Some(".".into()), vec![]);
         let s = r.to_sarif();
         assert_eq!(s["version"], "2.1.0");
-        assert!(s["$schema"].as_str().unwrap().contains("sarif-schema-2.1.0"));
+        assert!(s["$schema"]
+            .as_str()
+            .unwrap()
+            .contains("sarif-schema-2.1.0"));
         let driver = &s["runs"][0]["tool"]["driver"];
         assert_eq!(driver["name"], "phantom");
         assert_eq!(driver["version"], env!("CARGO_PKG_VERSION"));
@@ -697,7 +694,10 @@ mod tests {
         let r = Report::new(None, vec![f]);
         let s = r.to_sarif();
         let result = &s["runs"][0]["results"][0];
-        assert!(result.get("locations").is_none(), "no locations array when empty");
+        assert!(
+            result.get("locations").is_none(),
+            "no locations array when empty"
+        );
         // SARIF still requires ruleId/level/message to be present.
         assert_eq!(result["ruleId"], "d/no-loc");
         assert_eq!(result["level"], "note");

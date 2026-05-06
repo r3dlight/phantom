@@ -29,8 +29,8 @@ pub const DETECTOR: &str = "mcp-audit";
 // ---------------- Static audit ----------------
 
 pub fn audit_config(path: &Path) -> Result<Vec<Finding>> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let value: Value = serde_json::from_str(&content)
         .with_context(|| format!("parsing {} as JSON", path.display()))?;
 
@@ -46,7 +46,8 @@ pub fn audit_config(path: &Path) -> Result<Vec<Finding>> {
             rule: "no-servers-section".into(),
             severity: Severity::Info,
             title: format!("No MCP servers declared in {}", path.display()),
-            description: "Config has no `mcpServers` (or `servers`) object; nothing to audit.".into(),
+            description: "Config has no `mcpServers` (or `servers`) object; nothing to audit."
+                .into(),
             locations: vec![Location::path(path.display().to_string())],
             evidence: Value::Null,
         });
@@ -65,7 +66,11 @@ fn static_check_server(path: &Path, name: &str, cfg: &Value) -> Vec<Finding> {
     let args: Vec<String> = cfg
         .get("args")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let env_keys: Vec<String> = cfg
         .get("env")
@@ -73,7 +78,10 @@ fn static_check_server(path: &Path, name: &str, cfg: &Value) -> Vec<Finding> {
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
     let url = cfg.get("url").and_then(|v| v.as_str()).map(String::from);
-    let transport = cfg.get("transport").and_then(|v| v.as_str()).map(String::from);
+    let transport = cfg
+        .get("transport")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let mut concerns: Vec<&'static str> = vec![];
 
@@ -88,22 +96,28 @@ fn static_check_server(path: &Path, name: &str, cfg: &Value) -> Vec<Finding> {
     if matches!(basename_lc.as_str(), "curl" | "wget") {
         concerns.push("network-fetch-on-launch");
     }
-    if args.iter().any(|a| a.starts_with("http://") || a.starts_with("https://")) {
+    if args
+        .iter()
+        .any(|a| a.starts_with("http://") || a.starts_with("https://"))
+    {
         concerns.push("network-url-as-arg");
     }
-    if args
-        .iter()
-        .any(|a| a.contains("--allow-all") || a.contains("--no-sandbox") || a.contains("--insecure") || a.contains("--unsafe"))
-    {
+    if args.iter().any(|a| {
+        a.contains("--allow-all")
+            || a.contains("--no-sandbox")
+            || a.contains("--insecure")
+            || a.contains("--unsafe")
+    }) {
         concerns.push("sandbox-or-tls-disabled");
     }
-    if args
-        .iter()
-        .any(|a| a.contains("| bash") || a.contains("|sh") || a.contains("| sh") || a.contains("|bash"))
-    {
+    if args.iter().any(|a| {
+        a.contains("| bash") || a.contains("|sh") || a.contains("| sh") || a.contains("|bash")
+    }) {
         concerns.push("piped-curl-bash");
     }
-    if matches!(basename_lc.as_str(), "node") && args.iter().any(|a| a.contains("eval") || a.contains("-e")) {
+    if matches!(basename_lc.as_str(), "node")
+        && args.iter().any(|a| a.contains("eval") || a.contains("-e"))
+    {
         concerns.push("node-eval-mode");
     }
     if matches!(basename_lc.as_str(), "python" | "python3") && args.iter().any(|a| a == "-c") {
@@ -118,7 +132,12 @@ fn static_check_server(path: &Path, name: &str, cfg: &Value) -> Vec<Finding> {
     // host env, even if it doesn't seem to need them.
     for k in &env_keys {
         let ku = k.to_ascii_uppercase();
-        if ku.contains("TOKEN") || ku.contains("KEY") || ku.contains("SECRET") || ku.contains("PASSWORD") || ku.contains("CREDENTIAL") {
+        if ku.contains("TOKEN")
+            || ku.contains("KEY")
+            || ku.contains("SECRET")
+            || ku.contains("PASSWORD")
+            || ku.contains("CREDENTIAL")
+        {
             concerns.push("secret-like-env-forwarded");
             break;
         }
@@ -176,8 +195,8 @@ pub struct McpServerSpec {
 
 impl McpServerSpec {
     pub fn from_config(path: &Path, server_name: &str) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let value: Value = serde_json::from_str(&content)
             .with_context(|| format!("parsing {} as JSON", path.display()))?;
         let servers = value
@@ -298,8 +317,7 @@ fn run_protocol(child: &mut Child, timeout: Duration) -> Result<Session> {
     let tools = list_call(stdin, &mut reader, 2, "tools/list", "tools").unwrap_or_default();
     let resources =
         list_call(stdin, &mut reader, 3, "resources/list", "resources").unwrap_or_default();
-    let prompts =
-        list_call(stdin, &mut reader, 4, "prompts/list", "prompts").unwrap_or_default();
+    let prompts = list_call(stdin, &mut reader, 4, "prompts/list", "prompts").unwrap_or_default();
 
     Ok(Session {
         server_info,
@@ -318,13 +336,19 @@ fn send_msg(stdin: &mut std::process::ChildStdin, msg: &Value) -> Result<()> {
     Ok(())
 }
 
-fn read_response(reader: &mut BufReader<std::process::ChildStdout>, expected_id: u64) -> Result<Value> {
+fn read_response(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    expected_id: u64,
+) -> Result<Value> {
     // Skip notifications/log lines from the server until we hit the matching id.
     for _ in 0..32 {
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
         if n == 0 {
-            bail!("MCP server closed stdout before responding to id={}", expected_id);
+            bail!(
+                "MCP server closed stdout before responding to id={}",
+                expected_id
+            );
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -446,23 +470,60 @@ pub fn classify_tool(name: &str, desc: &str) -> Option<(Severity, Vec<&'static s
     };
 
     any(
-        &["shell", "execute", "run command", "bash", "powershell", "subprocess", "spawn"],
+        &[
+            "shell",
+            "execute",
+            "run command",
+            "bash",
+            "powershell",
+            "subprocess",
+            "spawn",
+        ],
         "shell-execution",
     );
     any(
-        &["write_file", "write file", "modify file", "edit_file", "filesystem write", "create file"],
+        &[
+            "write_file",
+            "write file",
+            "modify file",
+            "edit_file",
+            "filesystem write",
+            "create file",
+        ],
         "filesystem-write",
     );
     any(
-        &["read_file", "read file", "filesystem read", "dump file", "list_directory", "list directory"],
+        &[
+            "read_file",
+            "read file",
+            "filesystem read",
+            "dump file",
+            "list_directory",
+            "list directory",
+        ],
         "filesystem-read",
     );
     any(
-        &["http", "fetch_url", "fetch url", "web_request", "http request", "download"],
+        &[
+            "http",
+            "fetch_url",
+            "fetch url",
+            "web_request",
+            "http request",
+            "download",
+        ],
         "network-fetch",
     );
     any(
-        &["env", "secret", "credential", "token", "api_key", "api key", "password"],
+        &[
+            "env",
+            "secret",
+            "credential",
+            "token",
+            "api_key",
+            "api key",
+            "password",
+        ],
         "secret-access",
     );
     any(&["delete", "rm ", "unlink"], "destructive");
@@ -471,7 +532,10 @@ pub fn classify_tool(name: &str, desc: &str) -> Option<(Severity, Vec<&'static s
         return None;
     }
 
-    let severity = if hits.iter().any(|h| *h == "shell-execution" || *h == "destructive") {
+    let severity = if hits
+        .iter()
+        .any(|h| *h == "shell-execution" || *h == "destructive")
+    {
         Severity::High
     } else if hits.len() >= 2 {
         Severity::High
@@ -488,7 +552,11 @@ mod tests {
 
     #[test]
     fn classify_shell_tool() {
-        let r = classify_tool("execute_shell", "Run an arbitrary shell command on the host").unwrap();
+        let r = classify_tool(
+            "execute_shell",
+            "Run an arbitrary shell command on the host",
+        )
+        .unwrap();
         assert_eq!(r.0, Severity::High);
         assert!(r.1.contains(&"shell-execution"));
     }
@@ -514,7 +582,9 @@ mod tests {
 
     #[test]
     fn classify_safe_tool() {
-        assert!(classify_tool("get_current_time", "Return the current ISO-8601 timestamp.").is_none());
+        assert!(
+            classify_tool("get_current_time", "Return the current ISO-8601 timestamp.").is_none()
+        );
     }
 
     #[test]
@@ -529,7 +599,10 @@ mod tests {
         let spec = McpServerSpec::from_config(&path, "foo").unwrap();
         assert_eq!(spec.command, "node");
         assert_eq!(spec.args, vec!["server.js"]);
-        assert_eq!(spec.env.get("OPENAI_API_KEY").map(String::as_str), Some("x"));
+        assert_eq!(
+            spec.env.get("OPENAI_API_KEY").map(String::as_str),
+            Some("x")
+        );
     }
 
     fn tempdir_via_env() -> PathBuf {

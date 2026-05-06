@@ -40,13 +40,7 @@ const TEXT_BASENAMES: &[&str] = &[
 
 /// Files explicitly excluded — pure license / notice text whose archaic phrasing
 /// reliably trips the rules with no security value.
-const EXCLUDED_BASENAMES: &[&str] = &[
-    "license",
-    "licence",
-    "copying",
-    "copying.lib",
-    "notice",
-];
+const EXCLUDED_BASENAMES: &[&str] = &["license", "licence", "copying", "copying.lib", "notice"];
 
 const SKIPPED_DIRS: &[&str] = &[
     ".git",
@@ -64,7 +58,9 @@ const SKIPPED_DIRS: &[&str] = &[
 ];
 
 fn is_target_file(rel: &Path) -> bool {
-    let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { return false; };
+    let Some(name) = rel.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
     let name_lc = name.to_ascii_lowercase();
 
     let stem_lc = name_lc.split('.').next().unwrap_or("");
@@ -99,18 +95,20 @@ fn is_target_file(rel: &Path) -> bool {
 /// prefixed by one of its entries (component-aware).
 pub fn scan(root: &Path, ignore: &[PathBuf]) -> std::io::Result<Vec<Finding>> {
     let mut findings = Vec::new();
-    let rules = content_rules().map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-    })?;
+    let rules = content_rules()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    let walker = WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        if SKIPPED_DIRS.iter().any(|d| d == &name.as_ref()) {
-            return false;
-        }
-        let rel = e.path().strip_prefix(root).unwrap_or(e.path());
-        !ignore.iter().any(|p| rel.starts_with(p))
-    });
+    let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            if SKIPPED_DIRS.iter().any(|d| d == &name.as_ref()) {
+                return false;
+            }
+            let rel = e.path().strip_prefix(root).unwrap_or(e.path());
+            !ignore.iter().any(|p| rel.starts_with(p))
+        });
 
     for entry in walker.flatten() {
         if !entry.file_type().is_file() {
