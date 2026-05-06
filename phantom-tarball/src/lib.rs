@@ -469,9 +469,19 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Files where an attacker can inject code that runs at **build, install, CI,
+/// or dev-environment startup**. A modification of any of these between two
+/// archives is the highest-impact attack surface and triggers the strongest
+/// severity in `classify_modified` / `classify_added`.
+///
+/// Coverage is intentionally broad across ecosystems: Python `setup.py` and
+/// Ruby `extconf.rb` are as dangerous as `build.rs` — every one of them runs
+/// arbitrary code at install time.
 fn is_build_system_path(path: &str) -> bool {
     let bn = basename(path);
-    if bn == "configure.ac" || bn == "configure.in" {
+
+    // ─── Autotools (autoconf / automake / libtool) ──────────────────────────
+    if matches!(bn, "configure.ac" | "configure.in") {
         return true;
     }
     if bn.ends_with(".m4") || bn.ends_with(".am") {
@@ -480,18 +490,197 @@ fn is_build_system_path(path: &str) -> bool {
     if path.starts_with("m4/") || path.contains("/m4/") {
         return true;
     }
-    if bn == "build.rs" {
+
+    // ─── Make and variants ──────────────────────────────────────────────────
+    if matches!(bn, "Makefile" | "GNUmakefile" | "BSDmakefile" | "makefile") {
         return true;
     }
+    if bn.ends_with("/Makefile") || bn.ends_with("/GNUmakefile") {
+        return true;
+    }
+    if bn.ends_with(".mk") || bn.ends_with(".mak") {
+        return true;
+    }
+
+    // ─── CMake ──────────────────────────────────────────────────────────────
     if bn == "CMakeLists.txt" || bn.ends_with(".cmake") {
         return true;
     }
-    if bn == "Makefile" || bn.ends_with("/Makefile") {
+
+    // ─── Meson ──────────────────────────────────────────────────────────────
+    if matches!(bn, "meson.build" | "meson_options.txt" | "meson.options") {
         return true;
     }
-    if path.starts_with(".github/workflows/") {
+
+    // ─── Rust ───────────────────────────────────────────────────────────────
+    if bn == "build.rs" {
         return true;
     }
+    // Rust toolchain / cargo config — pin a malicious toolchain or redirect
+    // crate registries.
+    if matches!(bn, "rust-toolchain.toml" | "rust-toolchain") {
+        return true;
+    }
+    if path == ".cargo/config.toml"
+        || path == ".cargo/config"
+        || path.ends_with("/.cargo/config.toml")
+        || path.ends_with("/.cargo/config")
+    {
+        return true;
+    }
+
+    // ─── Python ─────────────────────────────────────────────────────────────
+    // setup.py runs arbitrary Python at install time; pyproject.toml drives
+    // the build backend (which can pull arbitrary deps).
+    if matches!(
+        bn,
+        "setup.py" | "pyproject.toml" | "MANIFEST.in" | "conftest.py" | "tox.ini" | "noxfile.py"
+    ) {
+        return true;
+    }
+
+    // ─── Ruby ───────────────────────────────────────────────────────────────
+    // Rakefile + extconf.rb both run Ruby; *.gemspec evaluates Ruby in `gem build`.
+    if matches!(bn, "Rakefile" | "rakefile" | "Gemfile" | "Gemfile.lock" | "extconf.rb") {
+        return true;
+    }
+    if bn.ends_with(".gemspec") {
+        return true;
+    }
+
+    // ─── Node native modules / package config ──────────────────────────────
+    // node-gyp builds native extensions from `binding.gyp`.
+    if bn == "binding.gyp" || bn.ends_with(".gyp") || bn.ends_with(".gypi") {
+        return true;
+    }
+    // npm/yarn registry redirects.
+    if matches!(bn, ".npmrc" | ".yarnrc" | ".yarnrc.yml" | ".pnpm-workspace.yaml") {
+        return true;
+    }
+
+    // ─── Java: Gradle, Maven ───────────────────────────────────────────────
+    if matches!(
+        bn,
+        "build.gradle"
+            | "build.gradle.kts"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "gradle.properties"
+            | "pom.xml"
+    ) {
+        return true;
+    }
+    if path.contains("gradle/wrapper/gradle-wrapper") {
+        return true;
+    }
+
+    // ─── Bazel / Buck ──────────────────────────────────────────────────────
+    if matches!(
+        bn,
+        "BUILD"
+            | "BUILD.bazel"
+            | "WORKSPACE"
+            | "WORKSPACE.bazel"
+            | "MODULE.bazel"
+            | ".bazelrc"
+            | ".bazelversion"
+            | "BUCK"
+    ) {
+        return true;
+    }
+    if bn.ends_with(".bzl") || bn.ends_with(".bazel") {
+        return true;
+    }
+
+    // ─── Containers ────────────────────────────────────────────────────────
+    if bn == "Dockerfile"
+        || bn == "Containerfile"
+        || bn.ends_with("/Dockerfile")
+        || bn.ends_with(".dockerfile")
+    {
+        return true;
+    }
+    if matches!(
+        bn,
+        "docker-compose.yml" | "docker-compose.yaml" | "compose.yml" | "compose.yaml"
+    ) {
+        return true;
+    }
+    // Dev containers run code on every contributor's machine.
+    if path.starts_with(".devcontainer/") || path.contains("/.devcontainer/") {
+        return true;
+    }
+    if bn == ".gitpod.yml" || bn == ".gitpod.Dockerfile" {
+        return true;
+    }
+
+    // ─── CI / build pipelines (any platform) ───────────────────────────────
+    if path.starts_with(".github/workflows/") || path.contains("/.github/workflows/") {
+        return true;
+    }
+    if path.starts_with(".github/actions/") || path.contains("/.github/actions/") {
+        return true;
+    }
+    if path == ".gitlab-ci.yml" || path.ends_with("/.gitlab-ci.yml") {
+        return true;
+    }
+    if path == ".circleci/config.yml" || path.ends_with("/.circleci/config.yml") {
+        return true;
+    }
+    if matches!(
+        bn,
+        ".travis.yml"
+            | "Jenkinsfile"
+            | "azure-pipelines.yml"
+            | "azure-pipelines.yaml"
+            | "bitbucket-pipelines.yml"
+            | ".drone.yml"
+            | "appveyor.yml"
+            | ".appveyor.yml"
+            | "cloudbuild.yaml"
+            | "cloudbuild.yml"
+            | "buildspec.yml"
+            | "buildspec.yaml"
+    ) {
+        return true;
+    }
+
+    // ─── Pre-commit / git hooks ────────────────────────────────────────────
+    if matches!(bn, ".pre-commit-config.yaml" | ".pre-commit-config.yml" | ".pre-commit-hooks.yaml") {
+        return true;
+    }
+    if path.starts_with(".husky/") || path.contains("/.husky/") {
+        return true;
+    }
+
+    // ─── Just / Task / SCons / xmake ───────────────────────────────────────
+    if matches!(bn, "Justfile" | "justfile" | "Taskfile.yml" | "Taskfile.yaml" | "xmake.lua") {
+        return true;
+    }
+    if matches!(bn, "SConstruct" | "SConscript") {
+        return true;
+    }
+
+    // ─── pip / Python toolchain ────────────────────────────────────────────
+    if matches!(bn, "pip.conf" | "pip.ini") {
+        return true;
+    }
+
+    // ─── OS packaging (rare in upstream tarballs but high-impact) ──────────
+    if path == "debian/rules" || path.ends_with("/debian/rules") {
+        return true;
+    }
+    if path == "debian/control" || path.ends_with("/debian/control") {
+        return true;
+    }
+    if bn.ends_with(".spec") && !path.starts_with("test/") && !path.starts_with("tests/") {
+        // RPM .spec — but exclude test fixtures named *.spec
+        return true;
+    }
+    if bn == "PKGBUILD" {
+        return true;
+    }
+
     false
 }
 
@@ -1087,6 +1276,202 @@ mod tests {
             ),
             Some(Severity::Info)
         );
+    }
+
+    // ─── Build-system path coverage across ecosystems ──────────────────────
+
+    #[test]
+    fn build_system_python() {
+        for p in [
+            "setup.py",
+            "pyproject.toml",
+            "MANIFEST.in",
+            "conftest.py",
+            "tests/conftest.py",
+            "tox.ini",
+            "noxfile.py",
+            "pip.conf",
+            "pip.ini",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_ruby() {
+        for p in [
+            "Rakefile",
+            "rakefile",
+            "Gemfile",
+            "Gemfile.lock",
+            "ext/foo/extconf.rb",
+            "extconf.rb",
+            "mygem.gemspec",
+            "lib/mygem.gemspec",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_node_native_and_registry() {
+        for p in [
+            "binding.gyp",
+            "src/foo.gyp",
+            "common.gypi",
+            ".npmrc",
+            ".yarnrc",
+            ".yarnrc.yml",
+            ".pnpm-workspace.yaml",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_containers_and_devcontainer() {
+        for p in [
+            "Dockerfile",
+            "docker/Dockerfile",
+            "alpine.dockerfile",
+            "Containerfile",
+            "docker-compose.yml",
+            "compose.yaml",
+            ".devcontainer/devcontainer.json",
+            ".devcontainer/Dockerfile",
+            "subdir/.devcontainer/setup.sh",
+            ".gitpod.yml",
+            ".gitpod.Dockerfile",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_meson_bazel_buck() {
+        for p in [
+            "meson.build",
+            "meson_options.txt",
+            "BUILD",
+            "BUILD.bazel",
+            "WORKSPACE",
+            "WORKSPACE.bazel",
+            "MODULE.bazel",
+            ".bazelrc",
+            ".bazelversion",
+            "BUCK",
+            "tools/rules.bzl",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_jvm() {
+        for p in [
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "gradle/wrapper/gradle-wrapper.jar",
+            "gradle/wrapper/gradle-wrapper.properties",
+            "pom.xml",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_make_variants() {
+        for p in [
+            "Makefile",
+            "GNUmakefile",
+            "BSDmakefile",
+            "src/Makefile",
+            "common.mk",
+            "rules.mak",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_ci_other_than_github() {
+        for p in [
+            ".gitlab-ci.yml",
+            ".circleci/config.yml",
+            ".travis.yml",
+            "Jenkinsfile",
+            "azure-pipelines.yml",
+            "azure-pipelines.yaml",
+            "bitbucket-pipelines.yml",
+            ".drone.yml",
+            "appveyor.yml",
+            ".appveyor.yml",
+            "cloudbuild.yaml",
+            "buildspec.yml",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_rust_toolchain_pinning() {
+        for p in [
+            "rust-toolchain.toml",
+            "rust-toolchain",
+            ".cargo/config.toml",
+            ".cargo/config",
+            "subdir/.cargo/config.toml",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_pre_commit_and_husky() {
+        for p in [
+            ".pre-commit-config.yaml",
+            ".pre-commit-config.yml",
+            ".pre-commit-hooks.yaml",
+            ".husky/pre-commit",
+            "subdir/.husky/post-merge",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_os_packaging() {
+        for p in [
+            "debian/rules",
+            "debian/control",
+            "myapp.spec",
+            "rpm/myapp.spec",
+            "PKGBUILD",
+        ] {
+            assert!(is_build_system_path(p), "expected build-system: {}", p);
+        }
+    }
+
+    #[test]
+    fn build_system_negatives() {
+        // Things that look adjacent but should NOT match:
+        for p in [
+            "src/main.c",
+            "src/lib.rs",
+            "README.md",
+            "tests/integration_test.py",
+            "docs/index.html",
+            "package.json",       // ecosystem-allowlisted, not build-system path
+            "Cargo.toml",         // ecosystem-allowlisted
+            "setup.cfg",          // ecosystem-allowlisted (pypi)
+            "tests/foo.spec",     // .spec inside tests/ is intentionally excluded
+            "configure",          // is in is_known_dist_artifact instead
+        ] {
+            assert!(!is_build_system_path(p), "expected NOT build-system: {}", p);
+        }
     }
 
     #[test]

@@ -299,12 +299,36 @@ phantom tarball-diff --baseline-tarball v1.0.tar.gz --release-tarball v1.1.tar.g
 
 | Severity | git-vs-release | release-vs-release |
 |----------|----------------|--------------------|
-| **P0** | Custom build-system file (e.g. `configure.ac`, `Makefile.am`, `build.rs`, custom `m4/*.m4`, `.github/workflows/*`) **modified** between git and release — the XZ Utils smoking gun. | *(reserved — git-only signal)* |
-| **HIGH** | Unknown `m4/*.m4` file present in the release but absent from the git tree, OR build-file obfuscation patterns (`eval \| tr`, `base64 -d`, long base64/hex blobs, `xxd -r`, `printf '\x…'`) inside any build-system file *even if it is on the autotools/gettext allowlist* — this is what catches the actual XZ payload. | Same — plus custom build files modified between releases (review-required, not P0 because version bumps legitimately edit `Makefile.am` etc.). |
+| **P0** | Custom build-system file (see coverage list below) **modified** between git and release — the XZ Utils smoking gun. | *(reserved — git-only signal)* |
+| **HIGH** | Unknown `m4/*.m4` file present in the release but absent from the git tree, OR build-file obfuscation patterns (`eval \| tr`, `base64 -d`, long base64/hex blobs, `xxd -r`, `printf '\x…'`) inside any build-system file *even if it is on the autotools/gettext allowlist* — this is what catches the actual XZ payload. | Same — plus custom build files modified between releases (review-required, not P0 because version bumps legitimately edit `Makefile.am`, `setup.py`, etc.). |
 | **MEDIUM** | Other source/data files differing between git and release. | Suppressed by default; surfaces as Info with `--include-source-changes`. |
 | **INFO** | Allowlisted dist artifacts (autotools-generated `configure`, `aclocal.m4`, gettext m4, libtool m4), `Cargo.toml` rewritten by `cargo publish`, npm `package.json` rewritten on publish, PyPI `PKG-INFO`, etc. | Same. Plus modified allowlisted build files (gettext bumps etc.) — content scan still runs and **independently** flags HIGH on obfuscation patterns. |
 
 The split between **modification of allowlisted m4 files** (Info, autoreconf regen is normal between releases) and **content-scan obfuscation** (HIGH, fires on the actual XZ payload) means the smoking gun for backdoored allowlisted files is preserved while clean release pairs stay quiet.
+
+#### Build-system path coverage
+
+A modification of any of these files triggers the strongest severity, because each can introduce code that runs at build, install, CI, or dev-environment startup. Coverage is intentionally broad across ecosystems — Python's `setup.py` and Ruby's `extconf.rb` are as dangerous as Rust's `build.rs`.
+
+| Ecosystem | Files |
+|-----------|-------|
+| Autotools | `configure.ac`, `configure.in`, `*.m4`, `*.am`, `m4/**` |
+| Make | `Makefile`, `GNUmakefile`, `BSDmakefile`, `*.mk`, `*.mak` |
+| CMake | `CMakeLists.txt`, `*.cmake` |
+| Meson | `meson.build`, `meson_options.txt` |
+| Rust | `build.rs`, `rust-toolchain.toml`, `rust-toolchain`, `.cargo/config.toml` |
+| Python | `setup.py`, `pyproject.toml`, `MANIFEST.in`, `conftest.py`, `tox.ini`, `noxfile.py`, `pip.conf` |
+| Ruby | `Rakefile`, `Gemfile`, `*.gemspec`, `extconf.rb` |
+| Node native | `binding.gyp`, `*.gyp`, `*.gypi`, `.npmrc`, `.yarnrc(.yml)`, `.pnpm-workspace.yaml` |
+| JVM | `build.gradle(.kts)`, `settings.gradle(.kts)`, `gradle.properties`, `gradle/wrapper/**`, `pom.xml` |
+| Bazel / Buck | `BUILD`, `BUILD.bazel`, `WORKSPACE(.bazel)`, `MODULE.bazel`, `*.bzl`, `.bazelrc`, `BUCK` |
+| Containers | `Dockerfile`, `*.dockerfile`, `Containerfile`, `docker-compose.y(a)ml`, `compose.y(a)ml` |
+| Dev environments | `.devcontainer/**`, `.gitpod.yml`, `.gitpod.Dockerfile` |
+| GitHub | `.github/workflows/**`, `.github/actions/**` |
+| Other CI | `.gitlab-ci.yml`, `.circleci/config.yml`, `.travis.yml`, `Jenkinsfile`, `azure-pipelines.y(a)ml`, `bitbucket-pipelines.yml`, `.drone.yml`, `appveyor.yml`, `cloudbuild.y(a)ml`, `buildspec.y(a)ml` |
+| Pre-commit / hooks | `.pre-commit-config.y(a)ml`, `.pre-commit-hooks.yaml`, `.husky/**` |
+| Task runners | `Justfile`, `justfile`, `Taskfile.y(a)ml`, `xmake.lua`, `SConstruct`, `SConscript` |
+| OS packaging | `debian/rules`, `debian/control`, `*.spec` (RPM), `PKGBUILD` |
 
 #### Ecosystem-aware allowlists
 
