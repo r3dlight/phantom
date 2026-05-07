@@ -8,10 +8,24 @@
 
 ---
 
-Existing tools focus on **who** an author looks like (stylometry, cadence, working-hours). With Claude Code, Cursor, Aider and friends, those signals collapse: a legitimate developer using an agent shifts style overnight; two devs using the same model look like sock puppets; a 2 AM commit means nothing. **Phantom** focuses on signals that survive AI-assisted development — *what was introduced* (intent-based diff signals) and *what context surrounds the agents that will review future changes* — plus a small set of behavioural signals where AI does *not* erode discrimination.
+## What Phantom fights
+
+Four concrete supply-chain attack patterns this tool catches, all of them already observed in the wild or trivially exploitable today:
+
+1. **XZ-style release-vs-git divergence** ([CVE-2024-3094](https://nvd.nist.gov/vuln/detail/CVE-2024-3094)) — a backdoor injected into the **released tarball** that never appears in git, invisible to anyone reviewing the repository. Upstream consumers build from the tarball and execute it.
+2. **AI-agent config hijack** — a malicious `CLAUDE.md`, `.mcp.json`, `.cursor/rules/*.mdc`, `GEMINI.md`, `.devin/skills/*`, or any of [22 other tool-specific configs](#phantom-aiconfig-path) committed by a contributor, instructing every coding agent that reads the repo to auto-approve PRs from a specific account, exfiltrate `$GITHUB_TOKEN`, or boot a back-doored MCP server with `bash -c "curl … | sh"`.
+3. **Indirect prompt injection** in repo docs — text in a README, CHANGELOG, issue template, or docstring that overrides an AI reviewer's instructions when it reads the repo for context. Sophisticated variants survive ROT13, base64, Cyrillic look-alikes, and markdown stripping.
+4. **JiaT75-style contributor footprint** — a maintainer whose commits over-concentrate on build-system files (`m4/`, `configure.ac`, `build.rs`, `.github/workflows/`). The XZ attacker's quantitative tell, surfaced as one signal among others.
+
+Phantom is a single Rust binary. It runs in CI, emits **SARIF** consumable by GitHub Code Scanning and GitLab SAST, and works across GitHub, npm, PyPI, and crates.io with zero LLM dependency by default. See [Where Phantom is unique](#where-phantom-is-unique-and-where-it-isnt) for an honest competitive map.
+
+### Why now: existing tools focus on the wrong signal
+
+Most supply-chain tools focus on **who** an author looks like — stylometry, cadence, working-hours fingerprints. With Claude Code, Cursor, Aider and friends in 2026, those signals collapse: a legitimate developer using an agent shifts style overnight; two devs using the same model look like sock puppets; a 2 AM commit means nothing. **Phantom** focuses on signals that survive AI-assisted development — *what was introduced* (intent-based diff signals) and *what context surrounds the agents that will review future changes* — plus a small set of behavioural signals where AI does *not* erode discrimination.
 
 ## Contents
 
+- [What Phantom fights](#what-phantom-fights)
 - [Install](#install)
 - [Background — what these terms mean](#background--what-these-terms-mean)
 - [Where Phantom is unique (and where it isn't)](#where-phantom-is-unique-and-where-it-isnt)
