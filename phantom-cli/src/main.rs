@@ -64,6 +64,26 @@ impl SeverityArg {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum SnapshotModeArg {
+    /// Relative when the repo's distribution allows it, else absolute.
+    Auto,
+    /// Always relative (falls back only when MAD is zero).
+    Relative,
+    /// Always absolute (legacy v0.1 behaviour).
+    Absolute,
+}
+
+impl From<SnapshotModeArg> for phantom_snapshot::ScoringMode {
+    fn from(m: SnapshotModeArg) -> Self {
+        match m {
+            SnapshotModeArg::Auto => phantom_snapshot::ScoringMode::Auto,
+            SnapshotModeArg::Relative => phantom_snapshot::ScoringMode::Relative,
+            SnapshotModeArg::Absolute => phantom_snapshot::ScoringMode::Absolute,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Audit a directory for AI tooling configs (CLAUDE.md, .mcp.json, .claude/settings.json,
@@ -99,10 +119,22 @@ enum Commands {
         /// Minimum commits before a contributor's build-attraction surfaces as a finding.
         #[arg(long, default_value_t = 10)]
         min_commits: u64,
-        /// Build-attraction percentage at which a contributor flags as Medium.
+        /// Scoring strategy. `auto` (default) compares each contributor against
+        /// the repo's own median+MAD when there are >= 3 eligible contributors
+        /// with non-uniform attraction, falling back to absolute thresholds
+        /// otherwise. `relative` forces relative scoring (still falls back when
+        /// MAD is zero). `absolute` reproduces the v0.1 behaviour using
+        /// `--medium-attraction` / `--high-attraction`.
+        #[arg(long, value_enum, default_value_t = SnapshotModeArg::Auto)]
+        mode: SnapshotModeArg,
+        /// Absolute build-attraction percentage at which a contributor flags as
+        /// Medium. Used in `--mode absolute` and as fallback when relative
+        /// scoring is unavailable.
         #[arg(long, default_value_t = 0.25)]
         medium_attraction: f64,
-        /// Build-attraction percentage at which a contributor flags as High.
+        /// Absolute build-attraction percentage at which a contributor flags as
+        /// High. Used in `--mode absolute` and as fallback when relative
+        /// scoring is unavailable.
         #[arg(long, default_value_t = 0.50)]
         high_attraction: f64,
     },
@@ -256,29 +288,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
             repo,
             db,
             min_commits,
+            mode,
             medium_attraction,
             high_attraction,
         } => {
-            let opts = phantom_snapshot::Options {
-                db_path: db.clone(),
-                min_commits_for_finding: *min_commits,
-                medium_attraction_pct: *medium_attraction,
-                high_attraction_pct: *high_attraction,
-            };
-            let report = phantom_snapshot::snapshot(
-                repo,
-                phantom_snapshot::Options {
-                    db_path: opts.db_path.clone(),
-                    ..phantom_snapshot::Options::default()
-                },
-            )?;
-            // Re-run with the user's thresholds for findings:
             let opts_for_findings = phantom_snapshot::Options {
                 db_path: None,
                 min_commits_for_finding: *min_commits,
                 medium_attraction_pct: *medium_attraction,
                 high_attraction_pct: *high_attraction,
+                mode: (*mode).into(),
+                ..phantom_snapshot::Options::default()
             };
+            let report = phantom_snapshot::snapshot(
+                repo,
+                phantom_snapshot::Options {
+                    db_path: db.clone(),
+                    ..phantom_snapshot::Options::default()
+                },
+            )?;
             let findings = phantom_snapshot::findings_from_report(&report, &opts_for_findings);
             (Some(repo.display().to_string()), findings)
         }
