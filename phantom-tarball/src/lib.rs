@@ -541,7 +541,10 @@ fn is_build_system_path(path: &str) -> bool {
 
     // ─── Ruby ───────────────────────────────────────────────────────────────
     // Rakefile + extconf.rb both run Ruby; *.gemspec evaluates Ruby in `gem build`.
-    if matches!(bn, "Rakefile" | "rakefile" | "Gemfile" | "Gemfile.lock" | "extconf.rb") {
+    if matches!(
+        bn,
+        "Rakefile" | "rakefile" | "Gemfile" | "Gemfile.lock" | "extconf.rb"
+    ) {
         return true;
     }
     if bn.ends_with(".gemspec") {
@@ -554,7 +557,10 @@ fn is_build_system_path(path: &str) -> bool {
         return true;
     }
     // npm/yarn registry redirects.
-    if matches!(bn, ".npmrc" | ".yarnrc" | ".yarnrc.yml" | ".pnpm-workspace.yaml") {
+    if matches!(
+        bn,
+        ".npmrc" | ".yarnrc" | ".yarnrc.yml" | ".pnpm-workspace.yaml"
+    ) {
         return true;
     }
 
@@ -646,7 +652,10 @@ fn is_build_system_path(path: &str) -> bool {
     }
 
     // ─── Pre-commit / git hooks ────────────────────────────────────────────
-    if matches!(bn, ".pre-commit-config.yaml" | ".pre-commit-config.yml" | ".pre-commit-hooks.yaml") {
+    if matches!(
+        bn,
+        ".pre-commit-config.yaml" | ".pre-commit-config.yml" | ".pre-commit-hooks.yaml"
+    ) {
         return true;
     }
     if path.starts_with(".husky/") || path.contains("/.husky/") {
@@ -654,7 +663,10 @@ fn is_build_system_path(path: &str) -> bool {
     }
 
     // ─── Just / Task / SCons / xmake ───────────────────────────────────────
-    if matches!(bn, "Justfile" | "justfile" | "Taskfile.yml" | "Taskfile.yaml" | "xmake.lua") {
+    if matches!(
+        bn,
+        "Justfile" | "justfile" | "Taskfile.yml" | "Taskfile.yaml" | "xmake.lua"
+    ) {
         return true;
     }
     if matches!(bn, "SConstruct" | "SConscript") {
@@ -1464,11 +1476,11 @@ mod tests {
             "README.md",
             "tests/integration_test.py",
             "docs/index.html",
-            "package.json",       // ecosystem-allowlisted, not build-system path
-            "Cargo.toml",         // ecosystem-allowlisted
-            "setup.cfg",          // ecosystem-allowlisted (pypi)
-            "tests/foo.spec",     // .spec inside tests/ is intentionally excluded
-            "configure",          // is in is_known_dist_artifact instead
+            "package.json",   // ecosystem-allowlisted, not build-system path
+            "Cargo.toml",     // ecosystem-allowlisted
+            "setup.cfg",      // ecosystem-allowlisted (pypi)
+            "tests/foo.spec", // .spec inside tests/ is intentionally excluded
+            "configure",      // is in is_known_dist_artifact instead
         ] {
             assert!(!is_build_system_path(p), "expected NOT build-system: {}", p);
         }

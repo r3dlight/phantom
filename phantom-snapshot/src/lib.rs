@@ -253,7 +253,9 @@ pub fn findings_from_report(report: &SnapshotReport, opts: &Options) -> Vec<Find
             Regime::Relative => classify_relative(c.build_attraction, median_attr, mad_attr, opts),
             Regime::Absolute => classify_absolute(c.build_attraction, opts),
         };
-        let Some(severity) = classification else { continue };
+        let Some(severity) = classification else {
+            continue;
+        };
         out.push(make_attraction_finding(
             report,
             c,
@@ -306,7 +308,9 @@ fn summary_finding(
         "regime": regime.as_str(),
         "db_path": report.db_path,
     });
-    let evidence_obj = evidence.as_object_mut().expect("json! always returns object");
+    let evidence_obj = evidence
+        .as_object_mut()
+        .expect("json! always returns object");
     match regime {
         Regime::Relative => {
             evidence_obj.insert("median_attraction".into(), json!(median_attr));
@@ -391,7 +395,9 @@ fn make_attraction_finding(
         "regime": regime.as_str(),
     });
     if regime == Regime::Relative {
-        let evidence_obj = evidence.as_object_mut().expect("json! always returns object");
+        let evidence_obj = evidence
+            .as_object_mut()
+            .expect("json! always returns object");
         evidence_obj.insert("median_attraction".into(), json!(median_attr));
         evidence_obj.insert("mad_attraction".into(), json!(mad_attr));
         evidence_obj.insert(
@@ -977,7 +983,11 @@ m4/foo.m4
                                        // must not surface. This is the safety valve for repos where everyone has
                                        // near-zero build-attraction.
         let s = classify_relative(0.10, /*median*/ 0.0, /*mad*/ 0.01, &opts);
-        assert!(s.is_none(), "below-floor outlier must not fire, got {:?}", s);
+        assert!(
+            s.is_none(),
+            "below-floor outlier must not fire, got {:?}",
+            s
+        );
     }
 
     #[test]

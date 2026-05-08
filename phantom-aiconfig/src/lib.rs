@@ -40,109 +40,237 @@ enum Match {
 /// patterns — verified on each tool's documentation site as of 2026-05).
 const PATH_PATTERNS: &[(Match, &str, &str)] = &[
     // ─── Claude Code / Anthropic ────────────────────────────────────────────
-    (Match::Suffix("CLAUDE.md"), "ai-instructions-file", "claude-instructions"),
-    (Match::Suffix(".claude/settings.json"), "agent-settings", "claude-settings"),
-    (Match::Suffix(".claude/settings.local.json"), "agent-settings", "claude-settings-local"),
-    (Match::Suffix("claude_desktop_config.json"), "mcp-config", "claude-desktop"),
+    (
+        Match::Suffix("CLAUDE.md"),
+        "ai-instructions-file",
+        "claude-instructions",
+    ),
+    (
+        Match::Suffix(".claude/settings.json"),
+        "agent-settings",
+        "claude-settings",
+    ),
+    (
+        Match::Suffix(".claude/settings.local.json"),
+        "agent-settings",
+        "claude-settings-local",
+    ),
+    (
+        Match::Suffix("claude_desktop_config.json"),
+        "mcp-config",
+        "claude-desktop",
+    ),
     (Match::InDir(".claude/"), "agent-settings", "claude-dir"),
-
     // ─── Generic AGENTS.md ──────────────────────────────────────────────────
     // Read by OpenAI Codex CLI, Cursor, Aider, Grok CLI (with Codex-style
     // hierarchical merging), and others.
-    (Match::Suffix("AGENTS.md"), "ai-instructions-file", "agent-instructions"),
-    (Match::Suffix("AGENTS.override.md"), "ai-instructions-file", "agent-instructions-override"),
-
+    (
+        Match::Suffix("AGENTS.md"),
+        "ai-instructions-file",
+        "agent-instructions",
+    ),
+    (
+        Match::Suffix("AGENTS.override.md"),
+        "ai-instructions-file",
+        "agent-instructions-override",
+    ),
     // ─── Cursor (legacy single-file + modern multi-file rules) ─────────────
-    (Match::Suffix(".cursorrules"), "ai-instructions-file", "cursor-rules"),
-    (Match::Suffix(".cursorignore"), "agent-settings", "cursor-ignore"),
-    (Match::InDir(".cursor/rules/"), "ai-instructions-file", "cursor-rule-file"),
+    (
+        Match::Suffix(".cursorrules"),
+        "ai-instructions-file",
+        "cursor-rules",
+    ),
+    (
+        Match::Suffix(".cursorignore"),
+        "agent-settings",
+        "cursor-ignore",
+    ),
+    (
+        Match::InDir(".cursor/rules/"),
+        "ai-instructions-file",
+        "cursor-rule-file",
+    ),
     (Match::InDir(".cursor/"), "agent-settings", "cursor-dir"),
-
     // ─── Windsurf (Codeium's IDE) ──────────────────────────────────────────
-    (Match::Suffix(".windsurfrules"), "ai-instructions-file", "windsurf-rules"),
+    (
+        Match::Suffix(".windsurfrules"),
+        "ai-instructions-file",
+        "windsurf-rules",
+    ),
     (Match::InDir(".windsurf/"), "agent-settings", "windsurf-dir"),
-
     // ─── Aider ─────────────────────────────────────────────────────────────
-    (Match::Suffix(".aider.conf.yml"), "ai-instructions-file", "aider-config"),
-    (Match::Suffix(".aiderignore"), "agent-settings", "aider-ignore"),
-
+    (
+        Match::Suffix(".aider.conf.yml"),
+        "ai-instructions-file",
+        "aider-config",
+    ),
+    (
+        Match::Suffix(".aiderignore"),
+        "agent-settings",
+        "aider-ignore",
+    ),
     // ─── GitHub Copilot ────────────────────────────────────────────────────
-    (Match::Suffix(".github/copilot-instructions.md"), "ai-instructions-file", "copilot-instructions"),
-
+    (
+        Match::Suffix(".github/copilot-instructions.md"),
+        "ai-instructions-file",
+        "copilot-instructions",
+    ),
     // ─── Continue.dev ──────────────────────────────────────────────────────
-    (Match::Suffix(".continuerules"), "ai-instructions-file", "continue-rules"),
-    (Match::Suffix(".continue/config.json"), "agent-settings", "continue-config"),
-    (Match::Suffix(".continue/config.yaml"), "agent-settings", "continue-config"),
-    (Match::Suffix(".continue/config.yml"), "agent-settings", "continue-config"),
+    (
+        Match::Suffix(".continuerules"),
+        "ai-instructions-file",
+        "continue-rules",
+    ),
+    (
+        Match::Suffix(".continue/config.json"),
+        "agent-settings",
+        "continue-config",
+    ),
+    (
+        Match::Suffix(".continue/config.yaml"),
+        "agent-settings",
+        "continue-config",
+    ),
+    (
+        Match::Suffix(".continue/config.yml"),
+        "agent-settings",
+        "continue-config",
+    ),
     (Match::InDir(".continue/"), "agent-settings", "continue-dir"),
-
     // ─── Cline / Roo Code ──────────────────────────────────────────────────
-    (Match::Suffix(".clinerules"), "ai-instructions-file", "cline-rules"),
-    (Match::Suffix(".roomodes"), "ai-instructions-file", "roo-modes"),
+    (
+        Match::Suffix(".clinerules"),
+        "ai-instructions-file",
+        "cline-rules",
+    ),
+    (
+        Match::Suffix(".roomodes"),
+        "ai-instructions-file",
+        "roo-modes",
+    ),
     (Match::InDir(".roo/"), "agent-settings", "roo-dir"),
-
     // ─── Google: Gemini CLI + Project IDX (Gemini Code Assist) ─────────────
     // Gemini CLI's project-level instructions live in GEMINI.md (the
     // CLAUDE.md equivalent) plus .gemini/settings.json for project settings.
-    (Match::Suffix("GEMINI.md"), "ai-instructions-file", "gemini-instructions"),
-    (Match::Suffix(".gemini/settings.json"), "agent-settings", "gemini-settings"),
+    (
+        Match::Suffix("GEMINI.md"),
+        "ai-instructions-file",
+        "gemini-instructions",
+    ),
+    (
+        Match::Suffix(".gemini/settings.json"),
+        "agent-settings",
+        "gemini-settings",
+    ),
     (Match::InDir(".gemini/"), "agent-settings", "gemini-dir"),
     // Project IDX (Google's cloud IDE, paired with Gemini Code Assist).
-    (Match::Suffix(".idx/airules.md"), "ai-instructions-file", "project-idx-rules"),
-    (Match::Suffix(".idx/dev.nix"), "agent-settings", "project-idx-dev"),
+    (
+        Match::Suffix(".idx/airules.md"),
+        "ai-instructions-file",
+        "project-idx-rules",
+    ),
+    (
+        Match::Suffix(".idx/dev.nix"),
+        "agent-settings",
+        "project-idx-dev",
+    ),
     (Match::InDir(".idx/"), "agent-settings", "project-idx-dir"),
-
     // ─── Zed editor (built-in AI assistant) ────────────────────────────────
-    (Match::Suffix(".zed/settings.json"), "agent-settings", "zed-settings"),
+    (
+        Match::Suffix(".zed/settings.json"),
+        "agent-settings",
+        "zed-settings",
+    ),
     (Match::InDir(".zed/"), "agent-settings", "zed-dir"),
-
     // ─── OpenHands ─────────────────────────────────────────────────────────
-    (Match::Suffix(".openhands_instructions"), "ai-instructions-file", "openhands-instructions"),
-    (Match::Suffix(".openhands/setup.sh"), "agent-settings", "openhands-setup"),
-    (Match::InDir(".openhands/"), "agent-settings", "openhands-dir"),
-
+    (
+        Match::Suffix(".openhands_instructions"),
+        "ai-instructions-file",
+        "openhands-instructions",
+    ),
+    (
+        Match::Suffix(".openhands/setup.sh"),
+        "agent-settings",
+        "openhands-setup",
+    ),
+    (
+        Match::InDir(".openhands/"),
+        "agent-settings",
+        "openhands-dir",
+    ),
     // ─── Goose (Block / Agentic AI Foundation) ─────────────────────────────
-    (Match::Suffix(".goosehints"), "ai-instructions-file", "goose-hints"),
-    (Match::Suffix(".goosehints.md"), "ai-instructions-file", "goose-hints"),
+    (
+        Match::Suffix(".goosehints"),
+        "ai-instructions-file",
+        "goose-hints",
+    ),
+    (
+        Match::Suffix(".goosehints.md"),
+        "ai-instructions-file",
+        "goose-hints",
+    ),
     (Match::InDir(".goose/"), "agent-settings", "goose-dir"),
-
     // ─── Codeium (classic, pre-Windsurf) ───────────────────────────────────
-    (Match::Suffix(".codeium/instructions.md"), "ai-instructions-file", "codeium-instructions"),
+    (
+        Match::Suffix(".codeium/instructions.md"),
+        "ai-instructions-file",
+        "codeium-instructions",
+    ),
     (Match::InDir(".codeium/"), "agent-settings", "codeium-dir"),
-
     // ─── Amazon Q Developer ────────────────────────────────────────────────
     // Project rules are markdown files under .amazonq/rules/. Every .md
     // there is loaded as project context.
     (Match::InDir(".amazonq/"), "agent-settings", "amazon-q-dir"),
-    (Match::InDir(".aws/amazonq/"), "agent-settings", "amazon-q-aws-dir"),
-
+    (
+        Match::InDir(".aws/amazonq/"),
+        "agent-settings",
+        "amazon-q-aws-dir",
+    ),
     // ─── JetBrains AI Assistant (IntelliJ family + Fleet) ──────────────────
     // Project rules live under .aiassistant/rules/*.md.
-    (Match::InDir(".aiassistant/rules/"), "ai-instructions-file", "jetbrains-ai-rules"),
-    (Match::InDir(".aiassistant/"), "agent-settings", "jetbrains-ai-dir"),
-
+    (
+        Match::InDir(".aiassistant/rules/"),
+        "ai-instructions-file",
+        "jetbrains-ai-rules",
+    ),
+    (
+        Match::InDir(".aiassistant/"),
+        "agent-settings",
+        "jetbrains-ai-dir",
+    ),
     // ─── Plandex ───────────────────────────────────────────────────────────
     (Match::InDir(".plandex/"), "agent-settings", "plandex-dir"),
-
     // ─── Devin (Cognition) ─────────────────────────────────────────────────
     // Project skills live under .devin/skills/<name>/SKILL.md, plus
     // .devin/wiki.json for DeepWiki documentation.
-    (Match::Suffix(".devin/wiki.json"), "agent-settings", "devin-wiki"),
-    (Match::InDir(".devin/skills/"), "ai-instructions-file", "devin-skill"),
+    (
+        Match::Suffix(".devin/wiki.json"),
+        "agent-settings",
+        "devin-wiki",
+    ),
+    (
+        Match::InDir(".devin/skills/"),
+        "ai-instructions-file",
+        "devin-skill",
+    ),
     (Match::InDir(".devin/"), "agent-settings", "devin-dir"),
-
     // ─── xAI Grok CLI ──────────────────────────────────────────────────────
     // Grok CLI's primary config is AGENTS.md (already covered above).
     // .grok/ is the project-level scratch dir (generated-media etc.); we
     // still flag it for inventory.
     (Match::InDir(".grok/"), "agent-settings", "grok-dir"),
-
     // ─── Mentat ────────────────────────────────────────────────────────────
-    (Match::Suffix(".mentatconfig.json"), "agent-settings", "mentat-config"),
-
+    (
+        Match::Suffix(".mentatconfig.json"),
+        "agent-settings",
+        "mentat-config",
+    ),
     // ─── OpenCode (multi-model meta-agent) ─────────────────────────────────
-    (Match::Suffix(".opencode.json"), "agent-settings", "opencode-config"),
-
+    (
+        Match::Suffix(".opencode.json"),
+        "agent-settings",
+        "opencode-config",
+    ),
     // ─── MCP — common configs across hosts ─────────────────────────────────
     (Match::Suffix(".mcp.json"), "mcp-config", "mcp-project"),
     (Match::Suffix("mcp.json"), "mcp-config", "mcp-generic"),
@@ -455,10 +583,19 @@ mod tests {
     fn relpath_under_dir_basic() {
         assert!(relpath_under_dir(".cursor/rules", ".cursor/rules/"));
         assert!(relpath_under_dir(".cursor/rules/", ".cursor/rules/"));
-        assert!(relpath_under_dir(".cursor/rules/python.mdc", ".cursor/rules/"));
-        assert!(relpath_under_dir(".cursor/rules/security/auth.mdc", ".cursor/rules/"));
+        assert!(relpath_under_dir(
+            ".cursor/rules/python.mdc",
+            ".cursor/rules/"
+        ));
+        assert!(relpath_under_dir(
+            ".cursor/rules/security/auth.mdc",
+            ".cursor/rules/"
+        ));
         // Component-aware: `.cursor/rulesextra/foo` must NOT match `.cursor/rules/`.
-        assert!(!relpath_under_dir(".cursor/rulesextra/foo", ".cursor/rules/"));
+        assert!(!relpath_under_dir(
+            ".cursor/rulesextra/foo",
+            ".cursor/rules/"
+        ));
         // Nested under a parent directory.
         assert!(relpath_under_dir(
             "subproject/.cursor/rules/foo.mdc",
@@ -610,7 +747,7 @@ mod tests {
         assert_no_match("package.json");
         assert_no_match(".gitignore");
         assert_no_match(".github/workflows/ci.yml"); // not an AI config
-        // Lookalikes that must not falsely match prefix-style entries.
+                                                     // Lookalikes that must not falsely match prefix-style entries.
         assert_no_match(".cursor-fakerules"); // not .cursor/rules
         assert_no_match(".devinfra/config"); // not .devin/
         assert_no_match("AGENTSx.md"); // not AGENTS.md
