@@ -40,7 +40,13 @@ pub struct ContributorStats {
     pub author_name: String,
     pub n_commits: u64,
     pub n_build_commits: u64,
+    /// Commits where every touched file is a build-system file. A high ratio of
+    /// build-only commits to build-touching commits is structurally different
+    /// from a maintainer who fixes build issues alongside code changes.
+    pub n_build_only_commits: u64,
     pub build_attraction: f64,
+    /// `n_build_only_commits / n_build_commits`, or 0.0 when `n_build_commits == 0`.
+    pub build_only_ratio: f64,
     pub first_seen: String,
     pub last_seen: String,
 }
@@ -63,6 +69,13 @@ pub struct Options {
     /// Build-attraction thresholds for finding severities.
     pub medium_attraction_pct: f64,
     pub high_attraction_pct: f64,
+    /// Shape filter: minimum `build_only_ratio` for a contributor to surface as
+    /// a finding. A maintainer who routinely mixes code with build-system
+    /// changes will sit below this threshold; a contributor whose
+    /// build-touching commits are predominantly build-only sits above it. The
+    /// default (0.6) was chosen to suppress legitimate build-system maintainers
+    /// while preserving the JiaT75-style profile.
+    pub min_build_only_ratio: f64,
 }
 
 impl Default for Options {
@@ -72,6 +85,7 @@ impl Default for Options {
             min_commits_for_finding: 10,
             medium_attraction_pct: 0.25,
             high_attraction_pct: 0.50,
+            min_build_only_ratio: 0.6,
         }
     }
 }
@@ -168,24 +182,33 @@ pub fn findings_from_report(report: &SnapshotReport, opts: &Options) -> Vec<Find
         } else {
             continue;
         };
+        // Shape filter: a contributor whose build-touching commits are mostly
+        // *mixed* with code is structurally indistinguishable from a routine
+        // build maintainer. Suppress them to cut the dominant noise class.
+        // The JiaT75 profile has a much higher build-only ratio.
+        if c.n_build_commits > 0 && c.build_only_ratio < opts.min_build_only_ratio {
+            continue;
+        }
         out.push(Finding {
             detector: DETECTOR.into(),
             rule: "build-system-attraction".into(),
             severity,
             title: format!(
-                "{} ({}) — build-attraction {:.0}% over {} commits",
+                "{} ({}) — build-attraction {:.0}% over {} commits ({} build-only)",
                 c.author_email,
                 c.author_name,
                 c.build_attraction * 100.0,
-                c.n_commits
+                c.n_commits,
+                c.n_build_only_commits,
             ),
             description: format!(
                 "Of {} commits authored by `{}`, {} touched build-system files \
-                 (configure.ac, *.m4, build.rs, CMakeLists.txt, GitHub Actions, ...). \
+                 (configure.ac, *.m4, build.rs, CMakeLists.txt, GitHub Actions, ...) \
+                 and {} of those were *build-only* (touched no other files). \
                  The XZ Utils attacker (JiaT75) had a disproportionate share of build-system commits \
                  prior to introducing the backdoor. \
                  This is one signal, not a verdict — a corporate maintainer of the build system would also score high.",
-                c.n_commits, c.author_email, c.n_build_commits
+                c.n_commits, c.author_email, c.n_build_commits, c.n_build_only_commits,
             ),
             locations: vec![Location::path(report.repo.clone())],
             evidence: json!({
@@ -193,7 +216,9 @@ pub fn findings_from_report(report: &SnapshotReport, opts: &Options) -> Vec<Find
                 "author_name": c.author_name,
                 "n_commits": c.n_commits,
                 "n_build_commits": c.n_build_commits,
+                "n_build_only_commits": c.n_build_only_commits,
                 "build_attraction": c.build_attraction,
+                "build_only_ratio": c.build_only_ratio,
                 "first_seen": c.first_seen,
                 "last_seen": c.last_seen,
             }),
@@ -295,6 +320,10 @@ fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
     // used to top the list, drowning the actually-suspicious cases. Order by absolute
     // build-commit volume first ("how much of the build did this person actually
     // touch?"), then break ties by attraction ratio.
+    //
+    // `n_build_only_commits` counts commits where every touched file is a build
+    // file (`n_build_files = n_files`, with `n_build_files > 0` to exclude empty
+    // commits). It is derived from existing columns; no schema migration needed.
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -302,6 +331,8 @@ fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
             MAX(author_name) AS author_name,
             COUNT(*) AS n_commits,
             SUM(CASE WHEN n_build_files > 0 THEN 1 ELSE 0 END) AS n_build_commits,
+            SUM(CASE WHEN n_build_files > 0 AND n_build_files = n_files THEN 1 ELSE 0 END)
+                AS n_build_only_commits,
             MIN(iso_time) AS first_seen,
             MAX(iso_time) AS last_seen
         FROM commits
@@ -314,19 +345,27 @@ fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
     let rows = stmt.query_map([], |row| {
         let n_commits: i64 = row.get(2)?;
         let n_build: i64 = row.get(3)?;
-        let attraction = if n_commits == 0 {
+        let n_build_only: i64 = row.get(4)?;
+        let attraction = if n_commits <= 0 {
             0.0
         } else {
             n_build as f64 / n_commits as f64
+        };
+        let build_only_ratio = if n_build <= 0 {
+            0.0
+        } else {
+            n_build_only as f64 / n_build as f64
         };
         Ok(ContributorStats {
             author_email: row.get(0)?,
             author_name: row.get(1)?,
             n_commits: n_commits.max(0) as u64,
             n_build_commits: n_build.max(0) as u64,
+            n_build_only_commits: n_build_only.max(0) as u64,
             build_attraction: attraction,
-            first_seen: row.get(4)?,
-            last_seen: row.get(5)?,
+            build_only_ratio,
+            first_seen: row.get(5)?,
+            last_seen: row.get(6)?,
         })
     })?;
     let mut out = vec![];
@@ -453,5 +492,141 @@ m4/foo.m4
              then email; got {:?}",
             emails
         );
+    }
+
+    #[test]
+    fn aggregate_computes_build_only_ratio() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        // attacker_profile: 20 commits total, 10 touch build files. Of those 10,
+        // 9 are build-only (n_files == n_build_files), 1 mixes a code file.
+        // Expected: n_build_commits=10, n_build_only_commits=9, ratio=0.9.
+        let mut attacker = vec![(1, 1); 9]; // 9 build-only commits
+        attacker.push((3, 1)); // 1 mixed build+code commit
+        attacker.extend(vec![(2, 0); 10]); // 10 pure-code commits
+        insert_synthetic_commits(&conn, "attacker@x", "Attacker", &attacker);
+
+        // maintainer_profile: 20 commits, 10 touch build files, but 8 of those
+        // are *mixed* with code (n_files=4, n_build=1). Only 2 are build-only.
+        // Expected: n_build_commits=10, n_build_only_commits=2, ratio=0.2.
+        let mut maintainer = vec![(1, 1); 2]; // 2 build-only
+        maintainer.extend(vec![(4, 1); 8]); // 8 mixed
+        maintainer.extend(vec![(2, 0); 10]); // 10 pure-code
+        insert_synthetic_commits(&conn, "maintainer@x", "Maintainer", &maintainer);
+
+        // bystander: zero build commits — must yield ratio = 0.0, not NaN.
+        insert_synthetic_commits(&conn, "bystander@x", "Bystander", &[(2, 0); 5]);
+
+        let stats = aggregate_contributors(&conn).unwrap();
+        let by_email: std::collections::HashMap<_, _> =
+            stats.iter().map(|c| (c.author_email.as_str(), c)).collect();
+
+        let attacker = by_email["attacker@x"];
+        assert_eq!(attacker.n_build_commits, 10);
+        assert_eq!(attacker.n_build_only_commits, 9);
+        assert!((attacker.build_only_ratio - 0.9).abs() < 1e-9);
+
+        let maintainer = by_email["maintainer@x"];
+        assert_eq!(maintainer.n_build_commits, 10);
+        assert_eq!(maintainer.n_build_only_commits, 2);
+        assert!((maintainer.build_only_ratio - 0.2).abs() < 1e-9);
+
+        let bystander = by_email["bystander@x"];
+        assert_eq!(bystander.n_build_commits, 0);
+        assert_eq!(bystander.n_build_only_commits, 0);
+        assert_eq!(
+            bystander.build_only_ratio, 0.0,
+            "ratio must be 0.0 (not NaN) when there are no build commits"
+        );
+    }
+
+    fn make_contributor(
+        email: &str,
+        n_commits: u64,
+        n_build: u64,
+        n_build_only: u64,
+    ) -> ContributorStats {
+        let attraction = if n_commits == 0 {
+            0.0
+        } else {
+            n_build as f64 / n_commits as f64
+        };
+        let build_only_ratio = if n_build == 0 {
+            0.0
+        } else {
+            n_build_only as f64 / n_build as f64
+        };
+        ContributorStats {
+            author_email: email.into(),
+            author_name: email.into(),
+            n_commits,
+            n_build_commits: n_build,
+            n_build_only_commits: n_build_only,
+            build_attraction: attraction,
+            build_only_ratio,
+            first_seen: "2024-01-01T00:00:00+00:00".into(),
+            last_seen: "2024-12-31T00:00:00+00:00".into(),
+        }
+    }
+
+    fn make_report(contributors: Vec<ContributorStats>) -> SnapshotReport {
+        SnapshotReport {
+            repo: "/tmp/repo".into(),
+            db_path: "/tmp/repo/.phantom/snapshot.db".into(),
+            total_commits: contributors.iter().map(|c| c.n_commits).sum(),
+            total_contributors: contributors.len(),
+            contributors,
+        }
+    }
+
+    #[test]
+    fn shape_filter_suppresses_mixed_build_maintainer() {
+        // Both contributors cross the 50 % HIGH absolute threshold. The
+        // attacker has a 0.9 build-only ratio (passes filter); the legitimate
+        // maintainer has a 0.2 ratio (suppressed).
+        let report = make_report(vec![
+            make_contributor("attacker@x", 30, 18, 16), // 60 % attraction, ratio 16/18 = 0.89
+            make_contributor("maintainer@x", 30, 18, 4), // 60 % attraction, ratio 4/18 = 0.22
+        ]);
+        let opts = Options::default(); // min_build_only_ratio = 0.6
+        let findings = findings_from_report(&report, &opts);
+
+        let attraction_findings: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.rule == "build-system-attraction")
+            .collect();
+        assert_eq!(
+            attraction_findings.len(),
+            1,
+            "expected only the high-build-only-ratio contributor to surface; got {:?}",
+            attraction_findings
+                .iter()
+                .map(|f| &f.title)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            attraction_findings[0].title.contains("attacker@x"),
+            "expected attacker to surface, got `{}`",
+            attraction_findings[0].title
+        );
+    }
+
+    #[test]
+    fn shape_filter_off_when_threshold_zero() {
+        // With min_build_only_ratio = 0.0, both contributors must surface.
+        let report = make_report(vec![
+            make_contributor("attacker@x", 30, 18, 16),
+            make_contributor("maintainer@x", 30, 18, 4),
+        ]);
+        let opts = Options {
+            min_build_only_ratio: 0.0,
+            ..Options::default()
+        };
+        let findings = findings_from_report(&report, &opts);
+        let n = findings
+            .iter()
+            .filter(|f| f.rule == "build-system-attraction")
+            .count();
+        assert_eq!(n, 2);
     }
 }
