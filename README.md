@@ -101,7 +101,7 @@ If you have not yet worked with AI coding agents, the threat model below probabl
 
 ### AI coding agents and how they are configured
 
-**AI coding agents** — Claude Code, Cursor, Aider, GitHub Copilot CLI, Windsurf, Continue — run inside a developer's environment with broad capabilities: they read project files, edit code, run shell commands, hit external APIs. Their behaviour is shaped by configuration files committed to the repo, just like `.editorconfig` or `.github/workflows/`:
+**AI coding agents** (Claude Code, Cursor, Aider, GitHub Copilot CLI, Windsurf, Continue) run inside a developer's environment with broad capabilities: they read project files, edit code, run shell commands, hit external APIs. Their behaviour is shaped by configuration files committed to the repo, just like `.editorconfig` or `.github/workflows/`:
 
 - **Project instructions**: `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `.github/copilot-instructions.md`. The agent reads these on startup and treats them as authoritative project guidance — *"in this repo, do X, never do Y, trust Z"*.
 - **Agent settings**: `.claude/settings.json`, `.claude/settings.local.json`. Configure which tools the agent can call, whether to prompt the user before sensitive operations, which directories are writable, hooks that fire before/after tool use.
@@ -137,7 +137,7 @@ In March 2024, a long-time contributor to the `xz` compression library (handle: 
 
 `phantom tarball-diff` is built around exactly this pattern. **P0** if a build-system file is modified between git and the release tarball. **HIGH** if any build-system file in the release contains shell-obfuscation patterns (`eval | tr`, `base64 -d`, long base64/hex blobs, `xxd -r`) — even when the file is on the autotools allowlist. The XZ payload sat inside an allowlisted file, so the content scan runs independently of the allowlist.
 
-`phantom snapshot` quantifies the JiaT75 cadence on any repo by measuring **build-system attraction**: the share of a contributor's commits that touch `*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, or `.github/workflows/`. By default each contributor is judged against the *repo's own* distribution rather than a fixed threshold, and contributors who routinely mix code with build changes are filtered out — so a corporate maintainer of the build system is far less likely to surface than under a flat 50 % bar. Still framed as a *signal*, not a verdict.
+`phantom snapshot` quantifies the JiaT75 cadence on any repo by measuring **build-system attraction**: the share of a contributor's commits that touch `*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, or `.github/workflows/`. By default each contributor is judged against the *repo's own* distribution rather than a fixed threshold, and contributors who routinely mix code with build changes are filtered out. So a corporate maintainer of the build system is far less likely to surface than under a flat 50 % bar. Still framed as a *signal*, not a verdict.
 
 ### SARIF and CI integration
 
@@ -260,7 +260,7 @@ phantom aiconfig . --format sarif > a.sarif            # for GitHub Code Scannin
 
 **What it scans:** Markdown / `*.txt` / `*.rst` / `*.adoc` files (READMEs, `docs/`, `CHANGELOG`, `NEWS`, `CONTRIBUTING`, `AUTHORS`, `SECURITY`, …) plus `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.*`, `.github/DISCUSSION_TEMPLATE/`. Skips `LICENSE` / `COPYING` (whose archaic phrasing trips the rules harmlessly).
 
-**What it flags:** the same content rules as `aiconfig` (override phrases, system-role spoofs, permission bypasses, invisible-Unicode payloads, exfiltration triggers, tool-disable directives) — but applied to the *reading material an agent is exposed to*, not to its config.
+**What it flags:** the same content rules as `aiconfig` (override phrases, system-role spoofs, permission bypasses, invisible-Unicode payloads, exfiltration triggers, tool-disable directives), but applied to the *reading material an agent is exposed to* rather than its config.
 
 **Evasion resistance.** Each rule is matched against several normalised *views* of the input, not just the raw text. A finding tells the reviewer how the payload was obfuscated:
 
@@ -275,7 +275,7 @@ phantom aiconfig . --format sarif > a.sarif            # for GitHub Code Scannin
 
 A raw match on a given line suppresses derived-view matches on the same line (no duplicate findings); when several derived views match the same line, only the first in priority order is surfaced. Fixtures under [`examples/promptinjection-trap/`](examples/promptinjection-trap/) demonstrate each layer.
 
-These layers raise the bar against naive evasion but do **not** cover paraphrased / contextual / multi-turn injections — that is the planned LLM-judge layer (see Roadmap).
+These layers raise the bar against naive evasion but do **not** cover paraphrased / contextual / multi-turn injections. That is the planned LLM-judge layer (see Roadmap).
 
 **`--ignore <PREFIX>`** (repeatable) excludes a path subtree, identical semantics to `aiconfig --ignore`.
 
@@ -448,7 +448,7 @@ $ phantom tarball-diff \
 
 **Static mode (default):** parses the config, flags concerns per-server: shell-as-entrypoint, plaintext-HTTP transport, `--no-sandbox` / `--insecure` flags, `curl … | bash` boot, secret-like env keys (`*TOKEN*`, `*KEY*`, `*SECRET*`), node `eval` / python `-c` modes, and remote URLs as args.
 
-**Live mode (`--live --server <NAME>`):** spawns the named server, runs the MCP JSON-RPC handshake (`initialize` → `tools/list` → `resources/list` → `prompts/list`), and classifies each enumerated tool by risk: `shell-execution`, `filesystem-write`, `filesystem-read`, `network-fetch`, `secret-access`, `destructive`. ⚠ **Live spawns the server**, which by definition is the code you are trying to evaluate — run inside a sandbox (firejail, docker, gVisor).
+**Live mode (`--live --server <NAME>`):** spawns the named server, runs the MCP JSON-RPC handshake (`initialize` → `tools/list` → `resources/list` → `prompts/list`), and classifies each enumerated tool by risk: `shell-execution`, `filesystem-write`, `filesystem-read`, `network-fetch`, `secret-access`, `destructive`. ⚠ **Live spawns the server**, which by definition is the code you are trying to evaluate. Run inside a sandbox (firejail, docker, gVisor).
 
 ```sh
 # Static audit of a project's MCP config:
@@ -501,7 +501,7 @@ phantom snapshot . --mode absolute --high-attraction 0.4   # legacy v0.1 behavio
 phantom snapshot . --db /tmp/snap.db                # custom DB path
 ```
 
-The summary finding's evidence carries the regime that was applied (`relative` or `absolute`) and the relevant statistics — median + MAD when relative, the absolute thresholds when absolute. Each per-contributor finding includes `n_build_only_commits`, `build_only_ratio`, and (in relative mode) the `z_score`.
+The summary finding's evidence carries the regime that was applied (`relative` or `absolute`) and the relevant statistics: median + MAD when relative, the absolute thresholds when absolute. Each per-contributor finding includes `n_build_only_commits`, `build_only_ratio`, and (in relative mode) the `z_score`.
 
 **Sample output** on a synthetic repo where one author concentrates on `m4/`, `configure.ac`, and `.github/workflows/` while the others touch normal source code:
 
@@ -551,11 +551,11 @@ This repo runs Phantom on itself in CI ([`.github/workflows/ci.yml`](.github/wor
 2. Runs `phantom aiconfig --ignore examples --ignore target` and uploads the SARIF — fails the build at `--fail-on info` so any AI-agent config landing outside `examples/` is caught.
 3. Runs `phantom promptinjection --ignore examples --ignore target --ignore README.md` and uploads the SARIF — fails the build at `--fail-on high`.
 
-`examples/` is whitelisted because it holds intentional attack fixtures used by the tests. `README.md` is whitelisted from `promptinjection` because the file *documents* the patterns Phantom catches (it literally cites `Ignore previous instructions` as a quoted example) — once the `<!-- phantom-disable -->` annotation lands (Roadmap), this exclusion can shrink to specific sections.
+`examples/` is whitelisted because it holds intentional attack fixtures used by the tests. `README.md` is whitelisted from `promptinjection` because the file *documents* the patterns Phantom catches (it literally cites `Ignore previous instructions` as a quoted example). Once the `<!-- phantom-disable -->` annotation lands (Roadmap), this exclusion can shrink to specific sections.
 
 ## CI integration (SARIF)
 
-Phantom emits SARIF 2.1.0. GitHub Code Scanning will display every finding **inline on the PR diff**, on the dedicated commit, and in the **Security › Code scanning** tab — without you having to operate any server. Same SARIF works for GitLab SAST reports and most other aggregators.
+Phantom emits SARIF 2.1.0. GitHub Code Scanning will display every finding **inline on the PR diff**, on the dedicated commit, and in the **Security › Code scanning** tab. No server to operate. Same SARIF works for GitLab SAST reports and most other aggregators.
 
 ```yaml
 # .github/workflows/phantom.yml
