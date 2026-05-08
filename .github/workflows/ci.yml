@@ -68,6 +68,14 @@ jobs:
           sarif_file: phantom-aiconfig.sarif
           category: phantom-aiconfig
 
+      - name: archive aiconfig SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantom-aiconfig-sarif
+          path: phantom-aiconfig.sarif
+          retention-days: 7
+
       - name: phantom · promptinjection — scan project docs
         run: |
           ./target/release/phantom \
@@ -85,6 +93,14 @@ jobs:
         with:
           sarif_file: phantom-promptinjection.sarif
           category: phantom-promptinjection
+
+      - name: archive promptinjection SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantom-promptinjection-sarif
+          path: phantom-promptinjection.sarif
+          retention-days: 7
 
       # ────────────────────────────────────────────────────────────────────
       # Build gates — fail the workflow on real findings.
