@@ -291,6 +291,10 @@ fn parse_git_log(s: &str) -> Result<Vec<CommitRecord>> {
 }
 
 fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
+    // Sort order rationale: a drive-by contributor with `1/1 = 100 %` build-attraction
+    // used to top the list, drowning the actually-suspicious cases. Order by absolute
+    // build-commit volume first ("how much of the build did this person actually
+    // touch?"), then break ties by attraction ratio.
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -302,8 +306,9 @@ fn aggregate_contributors(conn: &Connection) -> Result<Vec<ContributorStats>> {
             MAX(iso_time) AS last_seen
         FROM commits
         GROUP BY author_email
-        ORDER BY 1.0 * SUM(CASE WHEN n_build_files > 0 THEN 1 ELSE 0 END) / COUNT(*) DESC,
-                 COUNT(*) DESC
+        ORDER BY SUM(CASE WHEN n_build_files > 0 THEN 1 ELSE 0 END) DESC,
+                 1.0 * SUM(CASE WHEN n_build_files > 0 THEN 1 ELSE 0 END) / COUNT(*) DESC,
+                 author_email ASC
         "#,
     )?;
     let rows = stmt.query_map([], |row| {
@@ -391,5 +396,62 @@ m4/foo.m4
         assert!(is_build_system_path("build.rs"));
         assert!(is_build_system_path(".github/workflows/ci.yml"));
         assert!(!is_build_system_path("src/main.c"));
+    }
+
+    /// Insert N commits with the given (n_files, n_build_files) tuple for `email`.
+    fn insert_synthetic_commits(
+        conn: &Connection,
+        email: &str,
+        name: &str,
+        commits: &[(i64, i64)],
+    ) {
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO commits(sha, author_name, author_email, committer_email, \
+                 iso_time, n_files, n_build_files) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .unwrap();
+        for (i, (n_files, n_build)) in commits.iter().enumerate() {
+            let sha = format!("{}-{:04}", email, i);
+            stmt.execute(params![
+                sha,
+                name,
+                email,
+                email,
+                "2024-01-01T00:00:00+00:00",
+                n_files,
+                n_build,
+            ])
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn aggregate_orders_by_absolute_build_volume_not_ratio() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        // alice: 1 commit, 1 build → ratio 100 % but volume 1 (drive-by)
+        insert_synthetic_commits(&conn, "alice@x", "Alice", &[(2, 1)]);
+        // bob: 5 commits, 2 build → ratio 40 %, volume 2
+        insert_synthetic_commits(
+            &conn,
+            "bob@x",
+            "Bob",
+            &[(3, 1), (3, 1), (4, 0), (5, 0), (2, 0)],
+        );
+        // carol: 30 commits, 10 build → ratio 33 %, volume 10 (real build maintainer)
+        let mut carol_commits = vec![(2, 1); 10];
+        carol_commits.extend(vec![(2, 0); 20]);
+        insert_synthetic_commits(&conn, "carol@x", "Carol", &carol_commits);
+
+        let stats = aggregate_contributors(&conn).unwrap();
+        let emails: Vec<&str> = stats.iter().map(|c| c.author_email.as_str()).collect();
+        assert_eq!(
+            emails,
+            vec!["carol@x", "bob@x", "alice@x"],
+            "expected sort: highest absolute build-commit volume first, then ratio, \
+             then email; got {:?}",
+            emails
+        );
     }
 }
