@@ -137,7 +137,7 @@ In March 2024, a long-time contributor to the `xz` compression library (handle: 
 
 `phantom tarball-diff` is built around exactly this pattern: P0 if a build-system file is **modified** between git and the release tarball; HIGH if any build-system file in the release contains shell-obfuscation patterns (`eval | tr`, `base64 -d`, long base64/hex blobs, `xxd -r`) — even when the file is on the standard autotools allowlist, because the XZ payload sat inside an allowlisted file.
 
-`phantom snapshot` quantifies the JiaT75 cadence on any repo by measuring **build-system attraction**: the share of a contributor's commits that touch `*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, or `.github/workflows/`. JiaT75's was disproportionately high; a real corporate maintainer of the build system can score similarly, so the finding is a *signal* and not a verdict.
+`phantom snapshot` quantifies the JiaT75 cadence on any repo by measuring **build-system attraction**: the share of a contributor's commits that touch `*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, or `.github/workflows/`. By default each contributor is judged against the *repo's own* distribution rather than a fixed threshold, and contributors who routinely mix code with build changes are filtered out — so a corporate maintainer of the build system is far less likely to surface than under a flat 50 % bar. Still framed as a *signal*, not a verdict.
 
 ### SARIF and CI integration
 
@@ -159,7 +159,7 @@ Phantom is one tool in a fast-moving space. Honest positioning matters.
 
 ### Where Phantom is research-grade, not yet production-ready
 
-- **`snapshot` (experimental)** — build-system attraction per contributor is a novel signal but explicitly noisy: a legitimate corporate maintainer of the build system will trip the same threshold as JiaT75. Empirical validation across many real projects is still pending. **Run it for context, not as a CI gate.**
+- **`snapshot` (experimental)** — build-system attraction per contributor is a novel signal. The two dominant noise sources of v0.1 — a fixed threshold catching every legitimate build maintainer, and contributors who mix code with build changes counting like JiaT75 — are now mitigated by relative scoring against the repo's own distribution and a build-only-shape filter. Empirical validation across many real projects is still ongoing, so **run it for context, not as a CI gate**.
 
 ### What Phantom is not trying to be
 
@@ -179,7 +179,7 @@ These adjacent tools complement Phantom. The supply-chain auditor's stack should
 | **`aiconfig`** | Find dangerous AI-agent config files (CLAUDE.md, .mcp.json, .claude/settings.json, …). Supports a "ban AI-agent code outside `examples/`" CI policy. | **Marquee.** |
 | `promptinjection` | Find indirect prompt-injection patterns in repo docs targeting AI reviewers. Defeats common evasions (confusables, base64, ROT13, markdown) but not paraphrase. | Active. |
 | `mcp-audit` | Audit MCP server configs and (optionally) live-enumerate their tools. | Competent peer; deeper MCP audit lives in [mcp-scan](https://github.com/invariantlabs-ai/mcp-scan) et al. |
-| `snapshot` | Ingest git history into SQLite, surface contributors over-concentrated on build files. | **Experimental.** Noisy signal; run for context, not CI gating. |
+| `snapshot` | Ingest git history into SQLite, surface contributors over-concentrated on build files. Default scoring is relative to the repo's own distribution; a shape filter suppresses maintainers who mix code with build changes. | **Experimental.** Run for context, not CI gating — empirical validation ongoing. |
 
 ## Commands
 
@@ -410,31 +410,39 @@ phantom mcp-audit .mcp.json --live --server fs-utils --timeout-secs 20
 
 ### `phantom snapshot <REPO>` &nbsp;&nbsp;_(experimental)_
 
-> ⚠ **Experimental.** The build-system-attraction signal is novel but produces high false-positive rates by design — a legitimate corporate maintainer of the build system trips the same threshold as JiaT75. Run for context and as a starting point for manual investigation. **Do not use as a CI gate.**
->
-> Ingest a git repository's full history into SQLite and surface per-contributor build-system attraction.
+> Ingest a git repository's full history into SQLite and surface contributors whose build-system footprint is anomalous. Still experimental — empirical validation across many projects is ongoing — but the dominant false-positive source has been mitigated. Treat output as "investigate", not "guilty"; **do not use as a CI gate**.
 
-**What it does:** shells out to `git log --no-merges --all` for `<REPO>`, ingests every commit and its touched files into SQLite at `<REPO>/.phantom/snapshot.db`, and computes per-contributor stats (tenure, commit count, build-system commit ratio).
+**What it does.** Shells out to `git log --no-merges --all`, writes every commit and its touched files into SQLite at `<REPO>/.phantom/snapshot.db`, and computes per-contributor stats: total commits, build-touching commits, **build-only** commits (touched no other files), tenure, build-attraction.
 
-**What it flags:** contributors whose **build-system attraction** (% of commits touching `*.m4` / `configure.ac` / `*.am` / `build.rs` / `CMakeLists.txt` / `Makefile` / `.github/workflows/`) exceeds thresholds. The JiaT75 attacker pattern. *Explicitly noisy by design* — a legitimate corporate maintainer of the build system will also score high, so the finding is framed as "investigate", not "guilty".
+**How it scores.** *Build-system attraction* is the share of a contributor's commits touching `*.m4` / `configure.ac` / `*.am` / `build.rs` / `CMakeLists.txt` / `Makefile` / `.github/workflows/`. By default (`--mode auto`):
+
+- **Relative regime** — when ≥ 3 contributors meet the `--min-commits` floor and their attraction distribution is non-uniform, each contributor is judged against this repo's own median + MAD. Medium fires at z ≥ 3, High at z ≥ 5, with a 15 % absolute attraction floor (no flagging at 8 % even when the baseline is near zero). MAD is itself floored at 0.02 to avoid spurious z-explosions on tightly-clustered repos.
+- **Absolute fallback** — when the distribution is too small or too uniform (or `--mode absolute` is forced), the legacy thresholds apply: Medium ≥ 25 %, High ≥ 50 %.
+- **Shape filter** (always on) — a contributor whose build-touching commits are mostly *mixed* with code is suppressed. Specifically: when `n_build_only / n_build_commits < 0.6`. A routine build maintainer fixes build issues alongside code; the JiaT75 profile is heavily build-only.
+
+`--mode relative` forces relative scoring (still falls back when MAD is zero); `--mode absolute` reproduces the v0.1 behaviour.
 
 ```sh
-phantom snapshot .                                  # current repo
+phantom snapshot .                                  # current repo, default mode auto
 phantom snapshot ~/code/upstream                    # any cloned repo
 phantom snapshot . --min-commits 20                 # only contributors with ≥ 20 commits
-phantom snapshot . --high-attraction 0.4            # custom HIGH threshold (40 %)
+phantom snapshot . --mode absolute --high-attraction 0.4   # legacy v0.1 behaviour
 phantom snapshot . --db /tmp/snap.db                # custom DB path
 ```
+
+The summary finding's evidence carries the regime that was applied (`relative` or `absolute`) and the relevant statistics — median + MAD when relative, the absolute thresholds when absolute. Each per-contributor finding includes `n_build_only_commits`, `build_only_ratio`, and (in relative mode) the `z_score`.
 
 The SQLite database is queryable directly:
 
 ```sql
 SELECT author_email,
        COUNT(*) AS commits,
-       SUM(CASE WHEN n_build_files>0 THEN 1 ELSE 0 END) AS build_commits
+       SUM(CASE WHEN n_build_files>0 THEN 1 ELSE 0 END) AS build_commits,
+       SUM(CASE WHEN n_build_files>0 AND n_build_files=n_files THEN 1 ELSE 0 END)
+           AS build_only_commits
 FROM commits
 GROUP BY author_email
-ORDER BY 1.0 * SUM(CASE WHEN n_build_files>0 THEN 1 ELSE 0 END) / COUNT(*) DESC;
+ORDER BY build_commits DESC;
 ```
 
 ## Quick start
@@ -553,7 +561,7 @@ are trying to evaluate. Run inside a sandbox.
 
 ### `snapshot` — per-contributor build-system attraction
 
-Run on a synthetic repo where one author concentrates on `m4/`, `configure.ac`, and `.github/workflows/`:
+Run on a synthetic repo where one author concentrates on `m4/`, `configure.ac`, and `.github/workflows/` while the others touch normal source code:
 
 ```sh
 $ $PHANTOM snapshot /tmp/snapshot-demo --min-commits 3
@@ -562,25 +570,19 @@ $ $PHANTOM snapshot /tmp/snapshot-demo --min-commits 3
 ```text
 **Findings:** P0=0 HIGH=1 MEDIUM=0 LOW=0 INFO=1
 
-## [HIGH] sus@example.com (Sus Newcomer) — build-attraction 88% over 8 commits
-Of 8 commits, 7 touched build-system files. The XZ Utils attacker (JiaT75)
-had a disproportionate share of build-system commits prior to introducing
-the backdoor. This is one signal, not a verdict — a corporate maintainer of
-the build system would also score high.
+## [HIGH] sus@example.com (Sus Newcomer) — build-attraction 88% over 8 commits (7 build-only)
+Of 8 commits, 7 touched build-system files and 7 of those were build-only.
+Within this repo's eligible distribution (median 5.0%, MAD 2.0%), this
+contributor sits 41.5 MAD-units above the median. The XZ Utils attacker
+(JiaT75) had this kind of profile prior to the backdoor — one signal, not
+a verdict. Manual review required.
 
-## [INFO] Repository snapshot — 15 commits across 2 contributors.
-SQLite database stored at `/tmp/snapshot-demo/.phantom/snapshot.db`.
+## [INFO] Repository snapshot of `/tmp/snapshot-demo`
+24 commits across 4 contributors (4 eligible at >= 3 commits each).
+Regime: relative — eligible-distribution median 5.0%, MAD 2.0%.
 ```
 
-The SQLite database is queryable directly:
-
-```sql
-SELECT author_email,
-       COUNT(*) AS commits,
-       SUM(CASE WHEN n_build_files>0 THEN 1 ELSE 0 END) AS build_commits
-FROM commits
-GROUP BY author_email;
-```
+A legitimate build maintainer who edits `Makefile` alongside the code they touch is filtered out by the shape rule (their `build_only_ratio` falls below 0.6); the noisy v0.1 finding does not fire.
 
 ## Output, exit codes, environment
 
@@ -696,7 +698,7 @@ phantom:
 
 ## What Phantom is **not**
 
-See [Where Phantom is unique (and where it isn't)](#where-phantom-is-unique-and-where-it-isnt) for the complete positioning. Short summary: not a SAST, not a CVE scanner, not a runtime guardrail, not a reproducible-builds toolkit, not a verdict — every finding is an explainable signal for a human reviewer. The `snapshot` build-attraction signal is noisy by design and is shipped as **experimental**; treat its output as "investigate", not "guilty".
+See [Where Phantom is unique (and where it isn't)](#where-phantom-is-unique-and-where-it-isnt) for the complete positioning. Short summary: not a SAST, not a CVE scanner, not a runtime guardrail, not a reproducible-builds toolkit, not a verdict — every finding is an explainable signal for a human reviewer. The `snapshot` build-attraction signal is shipped as **experimental** while empirical validation across many projects is ongoing; treat its output as "investigate", not "guilty".
 
 ## Workspace
 
