@@ -579,7 +579,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "phantom-aiconfig"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "phantom-core",
  "phantom-rules",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "console",
  "serde",
@@ -614,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-fetch"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "dirs",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-mcp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "phantom-core",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-promptinjection"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "phantom-core",
  "phantom-rules",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-rules"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "phantom-core",
  "regex",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-snapshot"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "phantom-core",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-tarball"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flate2",
