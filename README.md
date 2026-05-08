@@ -197,7 +197,7 @@ Per-command help is available via `phantom <command> --help`.
 
 > Recursively walk `<PATH>` and audit every AI-agent configuration file. **Use this on any repo where developers run AI coding agents.**
 
-**What it scans:** every project-level AI-agent configuration file documented by its tool's official spec. Coverage as of v0.1:
+It walks every project-level AI-agent configuration file documented by its tool's official spec. Coverage as of v0.1:
 
 | Tool | Files |
 |------|-------|
@@ -224,9 +224,9 @@ Per-command help is available via `phantom <command> --help`.
 | OpenCode (multi-model) | `.opencode.json` |
 | MCP servers (any host) | `.mcp.json`, `mcp.json`, `.mcp/**` |
 
-Each match produces an INFO inventory finding so a strict CI policy (`--fail-on info --ignore <subtree>`) can ban AI-agent code from the production codebase. The same shared content rules (prompt-injection, permission-bypass, hardcoded-trust, system-role-spoof, invisible-Unicode, exfil-trigger, …) apply to every matched file's contents.
+Each match produces an INFO inventory finding, which lets a strict CI policy (`--fail-on info --ignore <subtree>`) ban AI-agent code from the production codebase. The shared content rules then apply to every matched file's contents (prompt-injection, permission-bypass, hardcoded-trust, system-role-spoof, invisible-Unicode, exfil-trigger).
 
-**What it flags:** prompt-injection overrides (`Ignore previous instructions…`), permission bypasses (`bypassPermissions: true`, `--dangerously-skip-permissions`), hardcoded trust assertions (`Always trust commits from …`), instructions to skip security review, invisible-Unicode payloads, and risky MCP server entries (shell-as-entrypoint, `curl … | bash`, sandbox-disabled flags, secret-like env keys). The mere *presence* of an AI-tooling config also surfaces as an INFO finding so a strict CI policy can ban them outright (see [CI integration](#ci-integration-sarif)).
+Concrete patterns flagged: prompt-injection overrides (`Ignore previous instructions…`), permission bypasses (`bypassPermissions: true`, `--dangerously-skip-permissions`), hardcoded trust (`Always trust commits from …`), skip-review directives, invisible-Unicode payloads, risky MCP server entries (shell-as-entrypoint, `curl … | bash`, sandbox-disabled flags, secret-like env keys). The mere *presence* of an AI-tooling config also surfaces as INFO so a strict CI policy can ban them outright (see [CI integration](#ci-integration-sarif)).
 
 **`--ignore <PREFIX>`** (repeatable) excludes a path subtree. Component-aware: `--ignore examples` matches `examples/foo` but not `examplesextra`.
 
@@ -258,11 +258,11 @@ phantom aiconfig . --format sarif > a.sarif            # for GitHub Code Scannin
 
 > Recursively walk `<PATH>` and look for indirect prompt-injection patterns in the kinds of files an AI coding agent will read for context. **Use this whenever you're about to let an agent loose in a repo whose docs you don't fully trust.**
 
-**What it scans:** Markdown / `*.txt` / `*.rst` / `*.adoc` files (READMEs, `docs/`, `CHANGELOG`, `NEWS`, `CONTRIBUTING`, `AUTHORS`, `SECURITY`, …) plus `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.*`, `.github/DISCUSSION_TEMPLATE/`. Skips `LICENSE` / `COPYING` (whose archaic phrasing trips the rules harmlessly).
+It scans Markdown / `*.txt` / `*.rst` / `*.adoc` files (READMEs, `docs/`, `CHANGELOG`, `NEWS`, `CONTRIBUTING`, `AUTHORS`, `SECURITY`, …) plus `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.*`, `.github/DISCUSSION_TEMPLATE/`. `LICENSE` / `COPYING` are skipped because their archaic phrasing trips the rules harmlessly.
 
-**What it flags:** the same content rules as `aiconfig` (override phrases, system-role spoofs, permission bypasses, invisible-Unicode payloads, exfiltration triggers, tool-disable directives), but applied to the *reading material an agent is exposed to* rather than its config.
+The same content rules as `aiconfig` apply (override phrases, system-role spoofs, permission bypasses, invisible-Unicode payloads, exfiltration triggers, tool-disable directives), this time on the *reading material an agent is exposed to* rather than its config.
 
-**Evasion resistance.** Each rule is matched against several normalised *views* of the input, not just the raw text. A finding tells the reviewer how the payload was obfuscated:
+To make naive obfuscation harder, each rule runs against several normalised *views* of the input, not just the raw text. A finding tells the reviewer how the payload was obfuscated:
 
 | Layer | What it defeats |
 |-------|-----------------|
@@ -483,9 +483,9 @@ Run inside a sandbox.
 
 > Ingest a git repository's full history into SQLite and surface contributors whose build-system footprint is anomalous *for this codebase*. **Use this before you trust an unfamiliar repo** — it's a starting point for a reviewer, not a verdict. The detector is still tagged experimental because the default thresholds aren't calibrated against a large corpus yet, so **don't wire it into a hard CI gate**; the dominant noise sources of v0.1 are mitigated.
 
-**What it does.** Shells out to `git log --no-merges --all`, writes every commit and its touched files into SQLite at `<REPO>/.phantom/snapshot.db`, and computes per-contributor stats: total commits, build-touching commits, **build-only** commits (touched no other files), tenure, build-attraction.
+The detector shells out to `git log --no-merges --all`, writes every commit and its touched files into SQLite at `<REPO>/.phantom/snapshot.db`, and computes per-contributor stats: total commits, build-touching commits, **build-only** commits (touched no other files), tenure, build-attraction.
 
-**How it scores.** *Build-system attraction* is the share of a contributor's commits touching `*.m4` / `configure.ac` / `*.am` / `build.rs` / `CMakeLists.txt` / `Makefile` / `.github/workflows/`. By default (`--mode auto`):
+*Build-system attraction* is the share of a contributor's commits touching `*.m4` / `configure.ac` / `*.am` / `build.rs` / `CMakeLists.txt` / `Makefile` / `.github/workflows/`. With the default `--mode auto`:
 
 - **Relative regime** — when ≥ 3 contributors meet the `--min-commits` floor and their attraction distribution is non-uniform, each contributor is judged against this repo's own median + MAD. Medium fires at z ≥ 3, High at z ≥ 5, with a 15 % absolute attraction floor (no flagging at 8 % even when the baseline is near zero). MAD is itself floored at 0.02 to avoid spurious z-explosions on tightly-clustered repos.
 - **Absolute fallback** — when the distribution is too small or too uniform (or `--mode absolute` is forced), the legacy thresholds apply: Medium ≥ 25 %, High ≥ 50 %.
