@@ -24,6 +24,22 @@ pub const DETECTOR: &str = "snapshot";
 
 const RECORD_SEP: &str = ">>>SHA<<<";
 
+/// Floor applied to MAD when computing z-scores so that a tightly-clustered
+/// distribution does not turn small absolute deviations into spurious huge
+/// outliers. Expressed in raw build-attraction units (0.02 = 2 percentage
+/// points).
+const MAD_FLOOR: f64 = 0.02;
+
+/// Below this MAD value the distribution is considered degenerate (essentially
+/// every eligible contributor has the same build-attraction), and relative
+/// scoring is skipped in favour of the absolute fallback.
+const MIN_MAD_FOR_RELATIVE: f64 = 1e-9;
+
+/// Minimum eligible-contributor count under which Auto mode falls back to
+/// absolute scoring. Below 3 there is not enough sample to estimate a useful
+/// median + MAD.
+const MIN_ELIGIBLE_FOR_RELATIVE: usize = 3;
+
 #[derive(Debug, Clone)]
 pub struct CommitRecord {
     pub sha: String,
@@ -60,13 +76,48 @@ pub struct SnapshotReport {
     pub contributors: Vec<ContributorStats>,
 }
 
+/// Strategy used to convert per-contributor build-attraction into severity.
+///
+/// * `Auto` (default) prefers the relative regime: a contributor is judged
+///   against the rest of *this* repository's distribution. It silently falls
+///   back to the absolute regime when the distribution is too small or too
+///   uniform to compute a meaningful median + MAD.
+/// * `Relative` forces the relative regime (still falls back when MAD is zero,
+///   to avoid dividing by zero).
+/// * `Absolute` reproduces the v0.1 behaviour: contributors are flagged purely
+///   on the `medium_attraction_pct` / `high_attraction_pct` thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScoringMode {
+    #[default]
+    Auto,
+    Relative,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Regime {
+    Relative,
+    Absolute,
+}
+
+impl Regime {
+    fn as_str(self) -> &'static str {
+        match self {
+            Regime::Relative => "relative",
+            Regime::Absolute => "absolute",
+        }
+    }
+}
+
 pub struct Options {
     /// Where to write the SQLite database. Defaults to `<repo>/.phantom/snapshot.db`.
     pub db_path: Option<PathBuf>,
     /// Minimum number of commits before a contributor's build-attraction is
     /// reported as a finding (suppresses noise from drive-by contributors).
     pub min_commits_for_finding: u64,
-    /// Build-attraction thresholds for finding severities.
+    /// Build-attraction thresholds for finding severities (used in Absolute
+    /// mode and as fallback when relative scoring is unavailable).
     pub medium_attraction_pct: f64,
     pub high_attraction_pct: f64,
     /// Shape filter: minimum `build_only_ratio` for a contributor to surface as
@@ -76,6 +127,19 @@ pub struct Options {
     /// default (0.6) was chosen to suppress legitimate build-system maintainers
     /// while preserving the JiaT75-style profile.
     pub min_build_only_ratio: f64,
+
+    /// Scoring strategy. See [`ScoringMode`].
+    pub mode: ScoringMode,
+    /// In the relative regime, the absolute build-attraction below which a
+    /// contributor is never flagged regardless of z-score. Avoids surfacing
+    /// "outliers" in repos where everyone has near-zero build-attraction.
+    pub relative_attraction_floor: f64,
+    /// In the relative regime, z-score above which a contributor is flagged
+    /// Medium (1 MAD-unit = MAD, floored at `MAD_FLOOR` to avoid explosions on
+    /// near-uniform distributions).
+    pub medium_z: f64,
+    /// In the relative regime, z-score above which a contributor is flagged High.
+    pub high_z: f64,
 }
 
 impl Default for Options {
@@ -86,6 +150,10 @@ impl Default for Options {
             medium_attraction_pct: 0.25,
             high_attraction_pct: 0.50,
             min_build_only_ratio: 0.6,
+            mode: ScoringMode::Auto,
+            relative_attraction_floor: 0.15,
+            medium_z: 3.0,
+            high_z: 5.0,
         }
     }
 }
@@ -154,78 +222,291 @@ pub fn snapshot(repo: &Path, opts: Options) -> Result<SnapshotReport> {
 /// Convert a snapshot report into Phantom findings using the supplied
 /// threshold options.
 pub fn findings_from_report(report: &SnapshotReport, opts: &Options) -> Vec<Finding> {
-    let mut out = vec![Finding {
+    let eligible: Vec<&ContributorStats> = report
+        .contributors
+        .iter()
+        .filter(|c| c.n_commits >= opts.min_commits_for_finding)
+        .collect();
+
+    let (median_attr, mad_attr) = compute_distribution(&eligible);
+    let regime = pick_regime(opts.mode, eligible.len(), mad_attr);
+
+    let mut out = vec![summary_finding(
+        report,
+        opts,
+        regime,
+        eligible.len(),
+        median_attr,
+        mad_attr,
+    )];
+
+    for c in &eligible {
+        // Shape filter applies in both regimes: a contributor whose
+        // build-touching commits are mostly *mixed* with code is structurally
+        // indistinguishable from a routine build maintainer. Suppress them to
+        // cut the dominant noise class. The JiaT75 profile has a much higher
+        // build-only ratio.
+        if c.n_build_commits > 0 && c.build_only_ratio < opts.min_build_only_ratio {
+            continue;
+        }
+        let classification = match regime {
+            Regime::Relative => classify_relative(c.build_attraction, median_attr, mad_attr, opts),
+            Regime::Absolute => classify_absolute(c.build_attraction, opts),
+        };
+        let Some(severity) = classification else { continue };
+        out.push(make_attraction_finding(
+            report,
+            c,
+            severity,
+            regime,
+            median_attr,
+            mad_attr,
+            opts,
+        ));
+    }
+
+    out
+}
+
+fn summary_finding(
+    report: &SnapshotReport,
+    opts: &Options,
+    regime: Regime,
+    eligible_count: usize,
+    median_attr: f64,
+    mad_attr: f64,
+) -> Finding {
+    let regime_blurb = match regime {
+        Regime::Relative => format!(
+            "Regime: relative — eligible-distribution median {:.1}%, MAD {:.1}%. \
+             Contributors flagged at z >= {:.1} (Medium) or z >= {:.1} (High), \
+             with absolute attraction floor of {:.0}%.",
+            median_attr * 100.0,
+            mad_attr * 100.0,
+            opts.medium_z,
+            opts.high_z,
+            opts.relative_attraction_floor * 100.0,
+        ),
+        Regime::Absolute => format!(
+            "Regime: absolute — Medium >= {:.0}%, High >= {:.0}% build-attraction. \
+             Relative scoring requires >= {} eligible contributors with non-uniform \
+             attraction; this run did not qualify (or was forced absolute).",
+            opts.medium_attraction_pct * 100.0,
+            opts.high_attraction_pct * 100.0,
+            MIN_ELIGIBLE_FOR_RELATIVE,
+        ),
+    };
+
+    let mut evidence = json!({
+        "total_commits": report.total_commits,
+        "total_contributors": report.total_contributors,
+        "eligible_contributors": eligible_count,
+        "min_commits_for_finding": opts.min_commits_for_finding,
+        "min_build_only_ratio": opts.min_build_only_ratio,
+        "regime": regime.as_str(),
+        "db_path": report.db_path,
+    });
+    let evidence_obj = evidence.as_object_mut().expect("json! always returns object");
+    match regime {
+        Regime::Relative => {
+            evidence_obj.insert("median_attraction".into(), json!(median_attr));
+            evidence_obj.insert("mad_attraction".into(), json!(mad_attr));
+            evidence_obj.insert("medium_z".into(), json!(opts.medium_z));
+            evidence_obj.insert("high_z".into(), json!(opts.high_z));
+            evidence_obj.insert(
+                "relative_attraction_floor".into(),
+                json!(opts.relative_attraction_floor),
+            );
+        }
+        Regime::Absolute => {
+            evidence_obj.insert(
+                "medium_attraction_pct".into(),
+                json!(opts.medium_attraction_pct),
+            );
+            evidence_obj.insert(
+                "high_attraction_pct".into(),
+                json!(opts.high_attraction_pct),
+            );
+        }
+    }
+
+    Finding {
         detector: DETECTOR.into(),
         rule: "snapshot-summary".into(),
         severity: Severity::Info,
         title: format!("Repository snapshot of `{}`", report.repo),
         description: format!(
-            "{} commits across {} contributors. SQLite database stored at `{}`.",
-            report.total_commits, report.total_contributors, report.db_path
+            "{} commits across {} contributors ({} eligible at >= {} commits each). \
+             SQLite database stored at `{}`. {}",
+            report.total_commits,
+            report.total_contributors,
+            eligible_count,
+            opts.min_commits_for_finding,
+            report.db_path,
+            regime_blurb,
         ),
         locations: vec![Location::path(report.repo.clone())],
-        evidence: json!({
-            "total_commits": report.total_commits,
-            "total_contributors": report.total_contributors,
-            "db_path": report.db_path,
-        }),
-    }];
+        evidence,
+    }
+}
 
-    for c in &report.contributors {
-        if c.n_commits < opts.min_commits_for_finding {
-            continue;
+fn make_attraction_finding(
+    report: &SnapshotReport,
+    c: &ContributorStats,
+    severity: Severity,
+    regime: Regime,
+    median_attr: f64,
+    mad_attr: f64,
+    opts: &Options,
+) -> Finding {
+    let regime_blurb = match regime {
+        Regime::Relative => {
+            let z = z_score(c.build_attraction, median_attr, mad_attr);
+            format!(
+                "Within this repo's eligible distribution (median {:.1}%, MAD {:.1}%) \
+                 this contributor sits {:.1} MAD-units above the median.",
+                median_attr * 100.0,
+                mad_attr * 100.0,
+                z,
+            )
         }
-        let severity = if c.build_attraction >= opts.high_attraction_pct {
-            Severity::High
-        } else if c.build_attraction >= opts.medium_attraction_pct {
-            Severity::Medium
-        } else {
-            continue;
-        };
-        // Shape filter: a contributor whose build-touching commits are mostly
-        // *mixed* with code is structurally indistinguishable from a routine
-        // build maintainer. Suppress them to cut the dominant noise class.
-        // The JiaT75 profile has a much higher build-only ratio.
-        if c.n_build_commits > 0 && c.build_only_ratio < opts.min_build_only_ratio {
-            continue;
-        }
-        out.push(Finding {
-            detector: DETECTOR.into(),
-            rule: "build-system-attraction".into(),
-            severity,
-            title: format!(
-                "{} ({}) — build-attraction {:.0}% over {} commits ({} build-only)",
-                c.author_email,
-                c.author_name,
-                c.build_attraction * 100.0,
-                c.n_commits,
-                c.n_build_only_commits,
-            ),
-            description: format!(
-                "Of {} commits authored by `{}`, {} touched build-system files \
-                 (configure.ac, *.m4, build.rs, CMakeLists.txt, GitHub Actions, ...) \
-                 and {} of those were *build-only* (touched no other files). \
-                 The XZ Utils attacker (JiaT75) had a disproportionate share of build-system commits \
-                 prior to introducing the backdoor. \
-                 This is one signal, not a verdict — a corporate maintainer of the build system would also score high.",
-                c.n_commits, c.author_email, c.n_build_commits, c.n_build_only_commits,
-            ),
-            locations: vec![Location::path(report.repo.clone())],
-            evidence: json!({
-                "author_email": c.author_email,
-                "author_name": c.author_name,
-                "n_commits": c.n_commits,
-                "n_build_commits": c.n_build_commits,
-                "n_build_only_commits": c.n_build_only_commits,
-                "build_attraction": c.build_attraction,
-                "build_only_ratio": c.build_only_ratio,
-                "first_seen": c.first_seen,
-                "last_seen": c.last_seen,
-            }),
-        });
+        Regime::Absolute => format!(
+            "Build-attraction {:.1}% crosses the absolute threshold (Medium {:.0}%, High {:.0}%).",
+            c.build_attraction * 100.0,
+            opts.medium_attraction_pct * 100.0,
+            opts.high_attraction_pct * 100.0,
+        ),
+    };
+
+    let mut evidence = json!({
+        "author_email": c.author_email,
+        "author_name": c.author_name,
+        "n_commits": c.n_commits,
+        "n_build_commits": c.n_build_commits,
+        "n_build_only_commits": c.n_build_only_commits,
+        "build_attraction": c.build_attraction,
+        "build_only_ratio": c.build_only_ratio,
+        "first_seen": c.first_seen,
+        "last_seen": c.last_seen,
+        "regime": regime.as_str(),
+    });
+    if regime == Regime::Relative {
+        let evidence_obj = evidence.as_object_mut().expect("json! always returns object");
+        evidence_obj.insert("median_attraction".into(), json!(median_attr));
+        evidence_obj.insert("mad_attraction".into(), json!(mad_attr));
+        evidence_obj.insert(
+            "z_score".into(),
+            json!(z_score(c.build_attraction, median_attr, mad_attr)),
+        );
     }
 
-    out
+    Finding {
+        detector: DETECTOR.into(),
+        rule: "build-system-attraction".into(),
+        severity,
+        title: format!(
+            "{} ({}) — build-attraction {:.0}% over {} commits ({} build-only)",
+            c.author_email,
+            c.author_name,
+            c.build_attraction * 100.0,
+            c.n_commits,
+            c.n_build_only_commits,
+        ),
+        description: format!(
+            "Of {} commits authored by `{}`, {} touched build-system files \
+             (configure.ac, *.m4, build.rs, CMakeLists.txt, GitHub Actions, ...) \
+             and {} of those were *build-only* (touched no other files). \
+             {} \
+             The XZ Utils attacker (JiaT75) had a disproportionate share of build-system commits \
+             prior to introducing the backdoor. \
+             This is one signal, not a verdict — manual review required.",
+            c.n_commits, c.author_email, c.n_build_commits, c.n_build_only_commits, regime_blurb,
+        ),
+        locations: vec![Location::path(report.repo.clone())],
+        evidence,
+    }
+}
+
+/// Median of a slice of finite f64 values. Returns 0.0 for an empty input.
+/// NaN / infinite inputs are filtered before sorting.
+fn median(xs: &[f64]) -> f64 {
+    let mut sorted: Vec<f64> = xs.iter().copied().filter(|x| x.is_finite()).collect();
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    // Note on lint: `n % 2 == 1` (odd-arm) is used rather than `n % 2 == 0`
+    // (even-arm) so that clippy's `manual_is_multiple_of` does not trigger.
+    // `usize::is_multiple_of` is only stable from Rust 1.87, while the
+    // workspace MSRV is 1.75.
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
+    }
+}
+
+/// Median + MAD of `build_attraction` over the supplied eligible contributors.
+fn compute_distribution(eligible: &[&ContributorStats]) -> (f64, f64) {
+    let xs: Vec<f64> = eligible.iter().map(|c| c.build_attraction).collect();
+    let med = median(&xs);
+    let dev: Vec<f64> = xs.iter().map(|x| (x - med).abs()).collect();
+    let mad = median(&dev);
+    (med, mad)
+}
+
+fn pick_regime(mode: ScoringMode, eligible_count: usize, mad: f64) -> Regime {
+    match mode {
+        ScoringMode::Absolute => Regime::Absolute,
+        ScoringMode::Relative => {
+            if mad > MIN_MAD_FOR_RELATIVE {
+                Regime::Relative
+            } else {
+                Regime::Absolute
+            }
+        }
+        ScoringMode::Auto => {
+            if eligible_count >= MIN_ELIGIBLE_FOR_RELATIVE && mad > MIN_MAD_FOR_RELATIVE {
+                Regime::Relative
+            } else {
+                Regime::Absolute
+            }
+        }
+    }
+}
+
+fn z_score(attraction: f64, median_attr: f64, mad: f64) -> f64 {
+    (attraction - median_attr) / mad.max(MAD_FLOOR)
+}
+
+fn classify_relative(
+    attraction: f64,
+    median_attr: f64,
+    mad: f64,
+    opts: &Options,
+) -> Option<Severity> {
+    if attraction < opts.relative_attraction_floor {
+        return None;
+    }
+    let z = z_score(attraction, median_attr, mad);
+    if z >= opts.high_z {
+        Some(Severity::High)
+    } else if z >= opts.medium_z {
+        Some(Severity::Medium)
+    } else {
+        None
+    }
+}
+
+fn classify_absolute(attraction: f64, opts: &Options) -> Option<Severity> {
+    if attraction >= opts.high_attraction_pct {
+        Some(Severity::High)
+    } else if attraction >= opts.medium_attraction_pct {
+        Some(Severity::Medium)
+    } else {
+        None
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
@@ -628,5 +909,212 @@ m4/foo.m4
             .filter(|f| f.rule == "build-system-attraction")
             .count();
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn median_handles_basic_lists() {
+        assert_eq!(median(&[]), 0.0, "empty -> 0.0");
+        assert_eq!(median(&[7.0]), 7.0, "singleton");
+        assert_eq!(median(&[1.0, 2.0]), 1.5, "two values");
+        assert_eq!(median(&[5.0, 1.0, 3.0]), 3.0, "odd, unsorted");
+        assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), 2.5, "even, unsorted");
+        // NaN must be filtered before computation, not poison the result.
+        assert_eq!(median(&[f64::NAN, 2.0, 4.0]), 3.0, "NaN filtered");
+        assert_eq!(
+            median(&[f64::INFINITY, f64::NAN, f64::NEG_INFINITY]),
+            0.0,
+            "all non-finite -> 0.0"
+        );
+    }
+
+    #[test]
+    fn pick_regime_force_modes_are_honored() {
+        assert_eq!(
+            pick_regime(ScoringMode::Absolute, 100, 0.5),
+            Regime::Absolute,
+            "Absolute is sticky regardless of distribution"
+        );
+        assert_eq!(
+            pick_regime(ScoringMode::Relative, 1, 0.5),
+            Regime::Relative,
+            "Relative does not require eligible-count threshold when forced"
+        );
+        assert_eq!(
+            pick_regime(ScoringMode::Relative, 100, 0.0),
+            Regime::Absolute,
+            "Relative falls back to Absolute when MAD is zero (avoids /0)"
+        );
+    }
+
+    #[test]
+    fn pick_regime_auto_falls_back_when_distribution_unusable() {
+        assert_eq!(
+            pick_regime(ScoringMode::Auto, 2, 0.5),
+            Regime::Absolute,
+            "Auto needs >= 3 eligible contributors"
+        );
+        assert_eq!(
+            pick_regime(ScoringMode::Auto, 10, 0.0),
+            Regime::Absolute,
+            "Auto falls back when MAD is zero"
+        );
+        assert_eq!(
+            pick_regime(ScoringMode::Auto, 10, 1e-12),
+            Regime::Absolute,
+            "Auto falls back when MAD is below numerical floor"
+        );
+        assert_eq!(
+            pick_regime(ScoringMode::Auto, 10, 0.05),
+            Regime::Relative,
+            "Auto picks Relative when distribution is usable"
+        );
+    }
+
+    #[test]
+    fn classify_relative_below_floor_never_fires() {
+        let opts = Options::default(); // floor = 0.15
+                                       // Even with z=10 (massive outlier), absolute attraction below the floor
+                                       // must not surface. This is the safety valve for repos where everyone has
+                                       // near-zero build-attraction.
+        let s = classify_relative(0.10, /*median*/ 0.0, /*mad*/ 0.01, &opts);
+        assert!(s.is_none(), "below-floor outlier must not fire, got {:?}", s);
+    }
+
+    #[test]
+    fn classify_relative_thresholds_at_z() {
+        let opts = Options::default(); // medium_z=3, high_z=5, floor=0.15
+                                       // median=0.05, MAD=0.05 (above MAD_FLOOR), so z = (x - 0.05) / 0.05.
+                                       // x=0.20 -> z=3.0 -> Medium; x=0.30 -> z=5.0 -> High.
+        assert_eq!(
+            classify_relative(0.20, 0.05, 0.05, &opts),
+            Some(Severity::Medium)
+        );
+        assert_eq!(
+            classify_relative(0.30, 0.05, 0.05, &opts),
+            Some(Severity::High)
+        );
+        // Just below medium_z must not fire.
+        assert!(classify_relative(0.19, 0.05, 0.05, &opts).is_none());
+    }
+
+    #[test]
+    fn classify_relative_floors_tiny_mad() {
+        // MAD = 0.001 should be floored to MAD_FLOOR = 0.02 to avoid spurious
+        // huge z-scores on a near-uniform distribution.
+        // Without flooring: z = (0.20 - 0.05) / 0.001 = 150 (massive outlier).
+        // With flooring:    z = (0.20 - 0.05) / 0.02  = 7.5 (still High, but
+        // a real outlier — the floor protects against degenerate cases, not
+        // legitimate signal).
+        let opts = Options::default();
+        let s = classify_relative(0.20, 0.05, 0.001, &opts);
+        assert_eq!(s, Some(Severity::High));
+    }
+
+    #[test]
+    fn findings_relative_mode_picks_outlier_over_baseline() {
+        // 5 contributors, all eligible. Four sit around 5–8 % build-attraction
+        // (a normal repo); one sits at 35 % with a clean build-only profile —
+        // a JiaT75-style shape. The relative regime must pick the outlier; the
+        // legacy absolute regime (50 % HIGH bar) would have missed this.
+        let report = make_report(vec![
+            make_contributor("alice@x", 100, 5, 5), // 5 %, 5/5 = 100 % build-only
+            make_contributor("bob@x", 100, 6, 5),   // 6 %
+            make_contributor("carol@x", 100, 7, 5), // 7 %
+            make_contributor("dave@x", 100, 8, 5),  // 8 %
+            make_contributor("attacker@x", 100, 35, 32), // 35 %, ratio 32/35 = 0.91
+        ]);
+        let opts = Options::default(); // Auto mode
+        let findings = findings_from_report(&report, &opts);
+
+        let summary = findings
+            .iter()
+            .find(|f| f.rule == "snapshot-summary")
+            .expect("summary must always be present");
+        assert_eq!(
+            summary.evidence.get("regime").and_then(|v| v.as_str()),
+            Some("relative"),
+            "expected relative regime, got {:?}",
+            summary.evidence.get("regime")
+        );
+
+        let attraction: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.rule == "build-system-attraction")
+            .collect();
+        assert_eq!(
+            attraction.len(),
+            1,
+            "only the attacker should surface; got {:?}",
+            attraction.iter().map(|f| &f.title).collect::<Vec<_>>()
+        );
+        assert!(attraction[0].title.contains("attacker@x"));
+        assert_eq!(attraction[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn findings_auto_mode_falls_back_to_absolute_with_few_contributors() {
+        // 2 eligible contributors → Auto must fall back to Absolute. With the
+        // legacy thresholds, a 60 % attraction crosses HIGH.
+        let report = make_report(vec![
+            make_contributor("attacker@x", 30, 18, 16), // ratio 16/18 = 0.89
+            make_contributor("other@x", 30, 5, 5),
+        ]);
+        let opts = Options::default();
+        let findings = findings_from_report(&report, &opts);
+        let summary = findings
+            .iter()
+            .find(|f| f.rule == "snapshot-summary")
+            .unwrap();
+        assert_eq!(
+            summary.evidence.get("regime").and_then(|v| v.as_str()),
+            Some("absolute"),
+        );
+
+        let attraction: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.rule == "build-system-attraction")
+            .collect();
+        assert_eq!(attraction.len(), 1);
+        assert!(attraction[0].title.contains("attacker@x"));
+    }
+
+    #[test]
+    fn findings_force_absolute_reproduces_legacy_behavior() {
+        // 5 contributors → Auto would pick Relative. ScoringMode::Absolute must
+        // override and use the legacy thresholds. Same input as the relative
+        // outlier test, but with a single contributor at 60 % to trip the
+        // absolute HIGH bar.
+        let report = make_report(vec![
+            make_contributor("alice@x", 100, 5, 5),
+            make_contributor("bob@x", 100, 6, 5),
+            make_contributor("carol@x", 100, 7, 5),
+            make_contributor("dave@x", 100, 8, 5),
+            make_contributor("legacy@x", 100, 60, 55), // 60 %, ratio 55/60 = 0.92
+        ]);
+        let opts = Options {
+            mode: ScoringMode::Absolute,
+            ..Options::default()
+        };
+        let findings = findings_from_report(&report, &opts);
+        let summary = findings
+            .iter()
+            .find(|f| f.rule == "snapshot-summary")
+            .unwrap();
+        assert_eq!(
+            summary.evidence.get("regime").and_then(|v| v.as_str()),
+            Some("absolute"),
+        );
+
+        let attraction: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.rule == "build-system-attraction")
+            .collect();
+        assert_eq!(
+            attraction.len(),
+            1,
+            "only the contributor crossing the absolute HIGH bar should surface"
+        );
+        assert!(attraction[0].title.contains("legacy@x"));
+        assert_eq!(attraction[0].severity, Severity::High);
     }
 }
