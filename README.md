@@ -159,7 +159,7 @@ Phantom is one tool in a fast-moving space. Honest positioning matters.
 
 ### Where Phantom is research-grade, not yet production-ready
 
-- **`snapshot` (experimental)** — build-system attraction per contributor is a novel signal. The two dominant noise sources of v0.1 — a fixed threshold catching every legitimate build maintainer, and contributors who mix code with build changes counting like JiaT75 — are now mitigated by relative scoring against the repo's own distribution and a build-only-shape filter. Empirical validation across many real projects is still ongoing, so **run it for context, not as a CI gate**.
+- **`snapshot` (experimental)** — a per-contributor signal worth running before you trust an unfamiliar repo: it surfaces contributors whose build-system footprint is anomalous *for this codebase*, the kind of profile JiaT75 fit. The two dominant v0.1 noise sources (a flat threshold catching every legitimate build maintainer, and contributors mixing code with build changes scoring like attackers) are mitigated by relative scoring against the repo's own distribution and a build-only-shape filter. Default thresholds (z=3 / z=5, MAD-floor 0.02, attraction-floor 15 %, build-only-ratio 0.6) are reasoned but not yet calibrated against a large corpus, so **don't gate CI on it yet**.
 
 ### What Phantom is not trying to be
 
@@ -179,7 +179,7 @@ These adjacent tools complement Phantom. The supply-chain auditor's stack should
 | **`aiconfig`** | Find dangerous AI-agent config files (CLAUDE.md, .mcp.json, .claude/settings.json, …). Supports a "ban AI-agent code outside `examples/`" CI policy. | **Marquee.** |
 | `promptinjection` | Find indirect prompt-injection patterns in repo docs targeting AI reviewers. Defeats common evasions (confusables, base64, ROT13, markdown) but not paraphrase. | Active. |
 | `mcp-audit` | Audit MCP server configs and (optionally) live-enumerate their tools. | Competent peer; deeper MCP audit lives in [mcp-scan](https://github.com/invariantlabs-ai/mcp-scan) et al. |
-| `snapshot` | Ingest git history into SQLite, surface contributors over-concentrated on build files. Default scoring is relative to the repo's own distribution; a shape filter suppresses maintainers who mix code with build changes. | **Experimental.** Run for context, not CI gating — empirical validation ongoing. |
+| `snapshot` | Ingest git history into SQLite, surface contributors over-concentrated on build files. Default scoring is relative to the repo's own distribution; a shape filter suppresses maintainers who mix code with build changes. | **Experimental.** Useful for human review of an unfamiliar repo. Thresholds not yet calibrated across a large corpus — keep out of hard CI gates. |
 
 ## Commands
 
@@ -483,7 +483,7 @@ Run inside a sandbox.
 
 ### `phantom snapshot <REPO>` &nbsp;&nbsp;_(experimental)_
 
-> Ingest a git repository's full history into SQLite and surface contributors whose build-system footprint is anomalous. Still experimental — empirical validation across many projects is ongoing — but the dominant false-positive source has been mitigated. Treat output as "investigate", not "guilty"; **do not use as a CI gate**.
+> Ingest a git repository's full history into SQLite and surface contributors whose build-system footprint is anomalous *for this codebase*. **Use this before you trust an unfamiliar repo** — it's a starting point for a reviewer, not a verdict. The detector is still tagged experimental because the default thresholds aren't calibrated against a large corpus yet, so **don't wire it into a hard CI gate**; the dominant noise sources of v0.1 are mitigated.
 
 **What it does.** Shells out to `git log --no-merges --all`, writes every commit and its touched files into SQLite at `<REPO>/.phantom/snapshot.db`, and computes per-contributor stats: total commits, build-touching commits, **build-only** commits (touched no other files), tenure, build-attraction.
 
