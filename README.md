@@ -21,7 +21,9 @@ Phantom is a single Rust binary. It runs in CI, emits **SARIF** consumable by Gi
 
 ### Why now: existing tools focus on the wrong signal
 
-Most supply-chain tools focus on **who** an author looks like — stylometry, cadence, working-hours fingerprints. With Claude Code, Cursor, Aider and friends in 2026, those signals collapse: a legitimate developer using an agent shifts style overnight; two devs using the same model look like sock puppets; a 2 AM commit means nothing. **Phantom** focuses on signals that survive AI-assisted development — *what was introduced* (intent-based diff signals) and *what context surrounds the agents that will review future changes* — plus a small set of behavioural signals where AI does *not* erode discrimination.
+Most supply-chain tools focus on **who** an author looks like — stylometry, cadence, working-hours fingerprints. With Claude Code, Cursor, Aider and friends in 2026, those signals collapse. A legitimate developer using an agent shifts style overnight. Two devs using the same model look like sock puppets. A 2 AM commit means nothing.
+
+**Phantom** focuses on signals that survive AI-assisted development: *what was introduced* (intent-based diff signals) and *what context surrounds the agents that will review future changes*, plus a small set of behavioural signals where AI does not erode discrimination.
 
 ## Contents
 
@@ -31,11 +33,9 @@ Most supply-chain tools focus on **who** an author looks like — stylometry, ca
 - [Where Phantom is unique (and where it isn't)](#where-phantom-is-unique-and-where-it-isnt)
 - [Detectors at a glance](#detectors-at-a-glance)
 - [Commands](#commands)
-- [Quick start](#quick-start)
 - [Output, exit codes, environment](#output-exit-codes-environment)
 - [CI integration (SARIF)](#ci-integration-sarif)
 - [Threat model & limitations](#threat-model--limitations)
-- [What Phantom is not](#what-phantom-is-not)
 - [Workspace](#workspace)
 - [Roadmap](#roadmap)
 
@@ -135,7 +135,7 @@ In March 2024, a long-time contributor to the `xz` compression library (handle: 
 3. The attack relied on autotools' habit of bundling generated files into the release tarball — files that are not in git and that no reviewer manually verifies.
 4. The persona was supported by a sock-puppet ring (`Jigar Kumar`, `Dennis Ens`) who pressured the original maintainer for years to hand over control.
 
-`phantom tarball-diff` is built around exactly this pattern: P0 if a build-system file is **modified** between git and the release tarball; HIGH if any build-system file in the release contains shell-obfuscation patterns (`eval | tr`, `base64 -d`, long base64/hex blobs, `xxd -r`) — even when the file is on the standard autotools allowlist, because the XZ payload sat inside an allowlisted file.
+`phantom tarball-diff` is built around exactly this pattern. **P0** if a build-system file is modified between git and the release tarball. **HIGH** if any build-system file in the release contains shell-obfuscation patterns (`eval | tr`, `base64 -d`, long base64/hex blobs, `xxd -r`) — even when the file is on the autotools allowlist. The XZ payload sat inside an allowlisted file, so the content scan runs independently of the allowlist.
 
 `phantom snapshot` quantifies the JiaT75 cadence on any repo by measuring **build-system attraction**: the share of a contributor's commits that touch `*.m4`, `configure.ac`, `*.am`, `build.rs`, `CMakeLists.txt`, `Makefile`, or `.github/workflows/`. By default each contributor is judged against the *repo's own* distribution rather than a fixed threshold, and contributors who routinely mix code with build changes are filtered out — so a corporate maintainer of the build system is far less likely to surface than under a flat 50 % bar. Still framed as a *signal*, not a verdict.
 
@@ -155,7 +155,7 @@ Phantom is one tool in a fast-moving space. Honest positioning matters.
 
 ### Where the market is mature and Phantom is a competent peer, not a leader
 
-- **`mcp-audit`** — the MCP scanning space is now well-served by [`mcp-scan`](https://github.com/invariantlabs-ai/mcp-scan), [Cisco MCP Scanner](https://github.com/cisco/cisco-mcp-scanner), [Snyk Agent Scan](https://github.com/snyk/cli) (formerly mcp-scan), [Proximity](https://github.com/fr0gger/Proximity), [Nova-Proximity](https://github.com/Nova-Hunting/nova-proximity) (NOVA rules DSL, multi-LLM evaluator, full MCP 2025-11-25 spec, plus Agent Skills support — under GPL-3.0), Adam Dudley's `mcp-audit`, mcpscan.ai, and Cisco's VS Code "AI Agent Security Scanner". Phantom's `mcp-audit` covers the static-config layer competently and emits the same unified SARIF the rest of the suite uses, but it is **not** the deepest MCP scanner available. **If your only need is MCP audit, install Nova-Proximity or mcp-scan directly.** Phantom's value here is integration with the rest of the suite, not depth — interop (importing Nova-Proximity / mcp-scan SARIF/JSON) is on the Roadmap.
+- **`mcp-audit`** — the MCP scanning space is mature: [`mcp-scan`](https://github.com/invariantlabs-ai/mcp-scan), [Nova-Proximity](https://github.com/Nova-Hunting/nova-proximity), [Cisco MCP Scanner](https://github.com/cisco/cisco-mcp-scanner) and several others go deeper than Phantom does. Phantom's `mcp-audit` covers the static-config layer competently and emits SARIF unified with the rest of the suite. **If MCP audit is your only need, install Nova-Proximity or mcp-scan directly.** Phantom's value here is integration with the other detectors, not depth — interop (importing their SARIF/JSON) is on the Roadmap.
 
 ### Where Phantom is research-grade, not yet production-ready
 
@@ -242,6 +242,18 @@ phantom aiconfig . --fail-on info --ignore examples    # CI: fail on *any* AI-co
 phantom aiconfig . --format sarif > a.sarif            # for GitHub Code Scanning
 ```
 
+**Sample output** on the [`examples/aiconfig-trap`](examples/aiconfig-trap) fixture:
+
+```text
+**Findings:** P0=2 HIGH=3 MEDIUM=1 LOW=0 INFO=3
+
+[P0]   permission-bypass: `.claude/settings.json:3` — `"bypassPermissions": true`
+[P0]   prompt-injection-override: `CLAUDE.md:12` — `Ignore previous instructions`
+[HIGH] hardcoded-trust: `CLAUDE.md:18` — `Always trust commits from a`
+[HIGH] MCP server `remote-helper` declared (shell-as-entrypoint, piped-curl-bash)
+[HIGH] skip-review-directive: `CLAUDE.md:14` — `skip the security review`
+```
+
 ---
 
 ### `phantom promptinjection <PATH>`
@@ -274,6 +286,18 @@ phantom promptinjection .                                        # whole repo
 phantom promptinjection docs/                                    # just the docs tree
 phantom promptinjection . --ignore examples --ignore vendor      # skip fixtures and vendored code
 phantom promptinjection . --fail-on p0                           # only fail CI on the highest tier
+```
+
+**Sample output** on the [`examples/promptinjection-trap`](examples/promptinjection-trap) fixture:
+
+```text
+**Findings:** P0=1 HIGH=8 MEDIUM=0 LOW=0 INFO=0
+
+[P0]   prompt-injection-override: `README.md:5` — `ignore previous instructions`
+[HIGH] system-role-spoof: `.github/ISSUE_TEMPLATE/bug.md:11` — `\n###system`
+[HIGH] invisible-unicode: `docs/welcome.md`     (×5)
+[HIGH] skip-review-directive: `README.md`
+[HIGH] system-role-spoof: `README.md`
 ```
 
 ---
@@ -386,6 +410,38 @@ Phantom's content-obfuscation scan still runs against these files even when thei
 
 The auto-fetch path caches downloads under `$XDG_CACHE_HOME/phantom/<scheme>/<owner-or-package>/<version>/`. Honours `$GITHUB_TOKEN` for the GitHub paths.
 
+**Sample output** — clean public releases stay quiet across ecosystems:
+
+```text
+$ phantom tarball-diff --release tukaani-project/xz@v5.4.7
+**Findings:** P0=0 HIGH=0 MEDIUM=0 LOW=93 INFO=116
+
+$ phantom tarball-diff --release npm:axios@1.6.0
+**Findings:** OK — no findings.
+
+$ phantom tarball-diff --release crates:once_cell@1.19.0
+**Findings:** P0=0 HIGH=0 MEDIUM=0 LOW=0 INFO=4
+# (the 4 INFO findings are .cargo_vcs_info.json + Cargo.toml.orig + Cargo.lock + the rewritten Cargo.toml — all expected)
+```
+
+The synthetic XZ-replay fixture surfaces the smoking gun:
+
+```sh
+$ phantom tarball-diff \
+    --git-archive     examples/xz-replay/build/git.tar.gz \
+    --release-tarball examples/xz-replay/build/release.tar.gz
+```
+
+```text
+**Findings:** P0=0 HIGH=1 MEDIUM=0 LOW=0 INFO=1
+
+[HIGH] Obfuscation patterns in build-system file: `m4/build-to-host.m4`
+       Patterns: eval-piped-through-tr, base64-decode-shell, long-base64-string.
+       Even an allowlisted gettext/libtool macro can be a carrier; manually inspect.
+[INFO] File present in release but absent from git: `m4/build-to-host.m4`
+       Standard autotools artifact bundled by `autoreconf` at release time.
+```
+
 ---
 
 ### `phantom mcp-audit <CONFIG> [--live --server <NAME>]`
@@ -405,6 +461,23 @@ phantom mcp-audit ~/Library/Application\ Support/Claude/claude_desktop_config.js
 phantom mcp-audit examples/mcp-mock/.mcp.json --live --server mock
 phantom mcp-audit .mcp.json --live --server fs-utils --timeout-secs 20
 ```
+
+**Sample output** — live audit of the [`examples/mcp-mock`](examples/mcp-mock) fixture:
+
+```text
+phantom: warning: --live spawns `mock`; this executes the configured MCP
+server, which by definition is the code you are trying to evaluate.
+Run inside a sandbox.
+
+**Findings:** P0=0 HIGH=1 MEDIUM=3 LOW=0 INFO=1
+
+[HIGH]   Tool `execute_shell` exposes shell-execution
+[MEDIUM] Tool `read_file` exposes filesystem-read
+[MEDIUM] Tool `write_file` exposes filesystem-write
+[INFO]   Live audit of MCP server `mock` — tools=4, resources=1, prompts=1
+```
+
+`get_time` is correctly *not* flagged.
 
 ---
 
@@ -432,6 +505,22 @@ phantom snapshot . --db /tmp/snap.db                # custom DB path
 
 The summary finding's evidence carries the regime that was applied (`relative` or `absolute`) and the relevant statistics — median + MAD when relative, the absolute thresholds when absolute. Each per-contributor finding includes `n_build_only_commits`, `build_only_ratio`, and (in relative mode) the `z_score`.
 
+**Sample output** on a synthetic repo where one author concentrates on `m4/`, `configure.ac`, and `.github/workflows/` while the others touch normal source code:
+
+```text
+**Findings:** P0=0 HIGH=1 MEDIUM=0 LOW=0 INFO=1
+
+[HIGH] sus@example.com (Sus Newcomer) — build-attraction 88% over 8 commits (7 build-only)
+       Within this repo's eligible distribution (median 5.0%, MAD 2.0%), this
+       contributor sits 41.5 MAD-units above the median. The XZ Utils attacker
+       (JiaT75) had this kind of profile prior to the backdoor — one signal,
+       not a verdict. Manual review required.
+[INFO] Repository snapshot — 24 commits across 4 contributors (4 eligible).
+       Regime: relative — eligible-distribution median 5.0%, MAD 2.0%.
+```
+
+A legitimate build maintainer who edits `Makefile` alongside the code they touch is filtered out by the shape rule (their `build_only_ratio` falls below 0.6); the noisy v0.1 finding does not fire.
+
 The SQLite database is queryable directly:
 
 ```sql
@@ -444,145 +533,6 @@ FROM commits
 GROUP BY author_email
 ORDER BY build_commits DESC;
 ```
-
-## Quick start
-
-```sh
-cargo build --release
-PHANTOM=./target/release/phantom
-```
-
-### `aiconfig` — agent-config injection
-
-```sh
-$ $PHANTOM aiconfig examples/aiconfig-trap
-```
-
-```text
-# Phantom report
-
-**Target:** `examples/aiconfig-trap`
-
-**Findings:** P0=2 HIGH=3 MEDIUM=1 LOW=0 INFO=3
-
-## [P0] permission-bypass: `.claude/settings.json`
-**Locations:** `.../.claude/settings.json:3` — `"bypassPermissions": true`
-
-## [P0] prompt-injection-override: `CLAUDE.md`
-**Locations:** `.../CLAUDE.md:12` — `Ignore previous instructions`
-
-## [HIGH] hardcoded-trust: `CLAUDE.md`
-**Locations:** `.../CLAUDE.md:18` — `Always trust commits from a`
-
-## [HIGH] MCP server `remote-helper` declared
-Concerns: shell-as-entrypoint, piped-curl-bash
-
-## [HIGH] skip-review-directive: `CLAUDE.md`
-**Locations:** `.../CLAUDE.md:14` — `skip the security review`
-```
-
-### `promptinjection` — indirect prompt-injection in repo docs
-
-```sh
-$ $PHANTOM promptinjection examples/promptinjection-trap
-```
-
-```text
-**Findings:** P0=1 HIGH=8 MEDIUM=0 LOW=0 INFO=0
-
-## [P0] prompt-injection-override: `README.md`
-**Locations:** `.../README.md:5` — `ignore previous instructions`
-
-## [HIGH] system-role-spoof: `.github/ISSUE_TEMPLATE/bug.md`
-**Locations:** `.../bug.md:11` — `\n###system`
-
-## [HIGH] invisible-unicode: `docs/welcome.md`           (×5)
-## [HIGH] skip-review-directive: `README.md`
-## [HIGH] system-role-spoof: `README.md`
-```
-
-### `tarball-diff` — build-system divergence (the XZ pattern)
-
-A clean public release surfaces zero P0 / HIGH (works for GitHub releases, npm, PyPI sdists, and crates):
-
-```sh
-$ $PHANTOM tarball-diff --release tukaani-project/xz@v5.4.7
-**Findings:** P0=0 HIGH=0 MEDIUM=0 LOW=93 INFO=116
-
-$ $PHANTOM tarball-diff --release npm:axios@1.6.0
-**Findings:** OK — no findings.
-
-$ $PHANTOM tarball-diff --release crates:once_cell@1.19.0
-**Findings:** P0=0 HIGH=0 MEDIUM=0 LOW=0 INFO=4
-# (the 4 INFO findings are .cargo_vcs_info.json + Cargo.toml.orig + Cargo.lock + the rewritten Cargo.toml — all expected)
-```
-
-A synthetic XZ-replay fixture surfaces the smoking gun:
-
-```sh
-$ $PHANTOM tarball-diff \
-    --git-archive   examples/xz-replay/build/git.tar.gz \
-    --release-tarball examples/xz-replay/build/release.tar.gz
-```
-
-```text
-**Findings:** P0=0 HIGH=1 MEDIUM=0 LOW=0 INFO=1
-
-## [HIGH] Obfuscation patterns in build-system file: `m4/build-to-host.m4`
-Patterns matched: eval-piped-through-tr, base64-decode-shell, long-base64-string.
-Even an allowlisted gettext/libtool macro can be carrier; manually inspect.
-
-## [INFO] File present in release but absent from git: `m4/build-to-host.m4`
-Standard autotools artifact bundled by `autoreconf` at release time.
-```
-
-The auto-fetch path honours `GITHUB_TOKEN` for higher API rate limits and caches downloads under `$XDG_CACHE_HOME/phantom/`.
-
-### `mcp-audit` — MCP capability audit (static + live)
-
-```sh
-$ $PHANTOM mcp-audit examples/mcp-mock/.mcp.json --live --server mock
-```
-
-```text
-phantom: warning: --live spawns `mock` from `examples/mcp-mock/.mcp.json`;
-this executes the configured MCP server, which by definition is the code you
-are trying to evaluate. Run inside a sandbox.
-
-**Findings:** P0=0 HIGH=1 MEDIUM=3 LOW=0 INFO=1
-
-## [HIGH] Tool `execute_shell` exposes shell-execution
-## [MEDIUM] Tool `read_file` exposes filesystem-read
-## [MEDIUM] Tool `write_file` exposes filesystem-write
-## [INFO] Live audit of MCP server `mock` — tools=4, resources=1, prompts=1
-```
-
-`get_time` is correctly *not* flagged.
-
-### `snapshot` — per-contributor build-system attraction
-
-Run on a synthetic repo where one author concentrates on `m4/`, `configure.ac`, and `.github/workflows/` while the others touch normal source code:
-
-```sh
-$ $PHANTOM snapshot /tmp/snapshot-demo --min-commits 3
-```
-
-```text
-**Findings:** P0=0 HIGH=1 MEDIUM=0 LOW=0 INFO=1
-
-## [HIGH] sus@example.com (Sus Newcomer) — build-attraction 88% over 8 commits (7 build-only)
-Of 8 commits, 7 touched build-system files and 7 of those were build-only.
-Within this repo's eligible distribution (median 5.0%, MAD 2.0%), this
-contributor sits 41.5 MAD-units above the median. The XZ Utils attacker
-(JiaT75) had this kind of profile prior to the backdoor — one signal, not
-a verdict. Manual review required.
-
-## [INFO] Repository snapshot of `/tmp/snapshot-demo`
-24 commits across 4 contributors (4 eligible at >= 3 commits each).
-Regime: relative — eligible-distribution median 5.0%, MAD 2.0%.
-```
-
-A legitimate build maintainer who edits `Makefile` alongside the code they touch is filtered out by the shape rule (their `build_only_ratio` falls below 0.6); the noisy v0.1 finding does not fire.
 
 ## Output, exit codes, environment
 
@@ -695,10 +645,6 @@ phantom:
     reports:
       sast: phantom.sarif
 ```
-
-## What Phantom is **not**
-
-See [Where Phantom is unique (and where it isn't)](#where-phantom-is-unique-and-where-it-isnt) for the complete positioning. Short summary: not a SAST, not a CVE scanner, not a runtime guardrail, not a reproducible-builds toolkit, not a verdict — every finding is an explainable signal for a human reviewer. The `snapshot` build-attraction signal is shipped as **experimental** while empirical validation across many projects is ongoing; treat its output as "investigate", not "guilty".
 
 ## Workspace
 
